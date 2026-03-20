@@ -1,10 +1,16 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+PYTHON_PREFIX = r'C:\Users\Administrator\AppData\Local\Python\pythoncore-3.14-64'
 
 a = Analysis(
     ['lineage_death_command.py'],
     pathex=[],
-    binaries=[],
+    binaries=[
+        (PYTHON_PREFIX + r'\python314.dll',    '.'),
+        (PYTHON_PREFIX + r'\python3.dll',      '.'),
+        (PYTHON_PREFIX + r'\vcruntime140.dll', '.'),
+        (PYTHON_PREFIX + r'\vcruntime140_1.dll', '.'),
+    ],
     datas=[],
     hiddenimports=[],
     hookspath=[],
