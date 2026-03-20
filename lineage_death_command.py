@@ -15,7 +15,7 @@ import pystray
 from PIL import Image, ImageDraw
 from updater import check_and_update, check_update_on_startup
 
-APP_VERSION  = "1.0.0"
+APP_VERSION  = "1.0.2"
 APP_EXE_NAME = "LineageHP"
 
 CONFIG_FILE = "hp_config.json"
@@ -58,6 +58,9 @@ DEFAULT_CONFIG = {
     "watch_c1_x": None, "watch_c1_y": None,
     "watch_c2_x": None, "watch_c2_y": None,
     "watch_c3_x": None, "watch_c3_y": None,
+    "watch_c1_count": 1,
+    "watch_c2_count": 1,
+    "watch_c3_count": 1,
 }
 
 
@@ -166,6 +169,9 @@ class App:
         ]
         c["watch_delay"]        = self._si(self.v_watch_delay.get(), 30)
         c["watch_px_threshold"] = self._si(self.v_watch_px_thr.get(), 3)
+        c["watch_c1_count"]     = self._si(self.v_watch_c1_count.get(), 1)
+        c["watch_c2_count"]     = self._si(self.v_watch_c2_count.get(), 1)
+        c["watch_c3_count"]     = self._si(self.v_watch_c3_count.get(), 1)
 
     # ─── Variable init ───────────────────────────────────────
     def _init_vars(self):
@@ -206,6 +212,9 @@ class App:
         self.v_watch_c1_pos = tk.StringVar(value=_wpos("watch_c1_x", "watch_c1_y"))
         self.v_watch_c2_pos = tk.StringVar(value=_wpos("watch_c2_x", "watch_c2_y"))
         self.v_watch_c3_pos = tk.StringVar(value=_wpos("watch_c3_x", "watch_c3_y"))
+        self.v_watch_c1_count = tk.StringVar(value=str(cfg.get("watch_c1_count", 1)))
+        self.v_watch_c2_count = tk.StringVar(value=str(cfg.get("watch_c2_count", 1)))
+        self.v_watch_c3_count = tk.StringVar(value=str(cfg.get("watch_c3_count", 1)))
 
     # ─── UI Build ────────────────────────────────────────────
     def _build_ui(self):
@@ -615,6 +624,7 @@ class App:
         cf = ttk.LabelFrame(parent, text=" 클릭 좌표 설정 ", padding="8 6")
         cf.pack(fill="x", pady=(0, 5))
         self.watch_btn_caps = []
+        count_vars = [self.v_watch_c1_count, self.v_watch_c2_count, self.v_watch_c3_count]
         for num, var, label in [
             (1, self.v_watch_c1_pos, "1차 (감지 후):  "),
             (2, self.v_watch_c2_pos, "2차 (바로 이동):"),
@@ -630,6 +640,10 @@ class App:
                              command=lambda n=num: self._start_watch_capture(n))
             btn.pack(side="left")
             self.watch_btn_caps.append(btn)
+            ttk.Label(row, text="  클릭 횟수:").pack(side="left")
+            ttk.Spinbox(row, from_=1, to=20, increment=1,
+                        textvariable=count_vars[num - 1], width=4
+                        ).pack(side="left", padx=(2, 0))
 
         # ── 지연시간 ──
         df = ttk.Frame(parent)
@@ -798,19 +812,23 @@ class App:
                 self._watch_execute_sequence()
 
     def _watch_execute_sequence(self):
-        def _click(xk, yk, label):
+        def _click_n(xk, yk, label, count_key):
             x, y = self.config.get(xk), self.config.get(yk)
             if x is None:
                 return
-            pyautogui.moveTo(x, y, duration=0.2)
-            time.sleep(0.3)
-            pyautogui.click()
-            self._log(f"감시 클릭: {label} ({x},{y})", "info")
+            n = max(1, self.config.get(count_key, 1))
+            for i in range(n):
+                pyautogui.moveTo(x, y, duration=0.2)
+                time.sleep(0.3)
+                pyautogui.click()
+                self._log(f"감시 클릭: {label} ({x},{y}) [{i+1}/{n}]", "info")
+                if i < n - 1:
+                    time.sleep(0.3)
 
         self._watch_set_status("클릭 실행 중...", "#81c784", 100)
-        _click("watch_c1_x", "watch_c1_y", "1차")
+        _click_n("watch_c1_x", "watch_c1_y", "1차", "watch_c1_count")
         time.sleep(0.5)
-        _click("watch_c2_x", "watch_c2_y", "2차")
+        _click_n("watch_c2_x", "watch_c2_y", "2차", "watch_c2_count")
 
         for i in range(60, 0, -1):
             if self.watch_stop_event.is_set():
@@ -819,7 +837,7 @@ class App:
             time.sleep(1)
 
         if not self.watch_stop_event.is_set():
-            _click("watch_c3_x", "watch_c3_y", "3차")
+            _click_n("watch_c3_x", "watch_c3_y", "3차", "watch_c3_count")
             self._watch_set_status("완료 - 감시 재시작", "#81c784", 0)
 
     # ─── Settings Popup ──────────────────────────────────────
