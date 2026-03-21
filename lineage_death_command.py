@@ -15,7 +15,7 @@ import pystray
 from PIL import Image, ImageDraw, ImageGrab
 from updater import check_and_update, check_update_on_startup
 
-APP_VERSION  = "1.0.6"
+APP_VERSION  = "1.0.7"
 APP_EXE_NAME = "LineageHP"
 
 CONFIG_FILE = "hp_config.json"
@@ -172,7 +172,8 @@ class App:
         c["fkey_slots"] = [
             {"key":   self.v_fkey_key[i].get(),
              "hours": self._si(self.v_fkey_hours[i].get(), 0),
-             "mins":  self._si(self.v_fkey_mins[i].get(),  5)}
+             "mins":  self._si(self.v_fkey_mins[i].get(),  0),
+             "secs":  self._si(self.v_fkey_secs[i].get(),  0)}
             for i in range(6)
         ]
         c["watch_delay"]        = self._si(self.v_watch_delay.get(), 30)
@@ -217,7 +218,8 @@ class App:
         _slots = cfg.get("fkey_slots", [{"key":"F5","hours":0,"mins":5}]*6)
         self.v_fkey_key   = [tk.StringVar(value=_slots[i].get("key",   "F5")) for i in range(6)]
         self.v_fkey_hours = [tk.StringVar(value=str(_slots[i].get("hours", 0))) for i in range(6)]
-        self.v_fkey_mins  = [tk.StringVar(value=str(_slots[i].get("mins",  5))) for i in range(6)]
+        self.v_fkey_mins  = [tk.StringVar(value=str(_slots[i].get("mins",  0))) for i in range(6)]
+        self.v_fkey_secs  = [tk.StringVar(value=str(_slots[i].get("secs",  0))) for i in range(6)]
         self.v_watch_delay  = tk.StringVar(value=str(cfg.get("watch_delay", 30)))
         self.v_watch_px_thr = tk.StringVar(value=str(cfg.get("watch_px_threshold", 3)))
         r = cfg.get("watch_region")
@@ -510,7 +512,7 @@ class App:
         gf = ttk.Frame(parent)
         gf.pack(fill="x")
 
-        headers = ["슬롯", "키", "시간", "", "분", "", "", "상태"]
+        headers = ["슬롯", "키", "시간", "", "분", "", "초", "", "상태"]
         for c, h in enumerate(headers):
             ttk.Label(gf, text=h, foreground="#aaaaaa",
                       font=("맑은 고딕", 8, "bold")
@@ -535,16 +537,21 @@ class App:
             ttk.Spinbox(gf, from_=0, to=59, increment=1,
                         textvariable=self.v_fkey_mins[i], width=4
                         ).grid(row=i+1, column=4, pady=2)
-            ttk.Label(gf, text="분").grid(row=i+1, column=5, padx=(2, 8), pady=2, sticky="w")
+            ttk.Label(gf, text="분").grid(row=i+1, column=5, padx=(2, 6), pady=2, sticky="w")
+
+            ttk.Spinbox(gf, from_=0, to=59, increment=1,
+                        textvariable=self.v_fkey_secs[i], width=4
+                        ).grid(row=i+1, column=6, pady=2)
+            ttk.Label(gf, text="초").grid(row=i+1, column=7, padx=(2, 8), pady=2, sticky="w")
 
             btn = ttk.Button(gf, text="시작", width=5,
                              command=lambda n=idx: self._toggle_fkey_slot(n))
-            btn.grid(row=i+1, column=6, padx=(0, 8), pady=2)
+            btn.grid(row=i+1, column=8, padx=(0, 8), pady=2)
             self.fkey_btns.append(btn)
 
             lbl = ttk.Label(gf, text="꺼짐", foreground="#888888",
                             font=("맑은 고딕", 8, "bold"))
-            lbl.grid(row=i+1, column=7, pady=2, sticky="w")
+            lbl.grid(row=i+1, column=9, pady=2, sticky="w")
             self.fkey_lbls.append(lbl)
 
     # ─── Fkey workers ─────────────────────────────────────────
@@ -569,26 +576,38 @@ class App:
         else:
             h = self._si(self.v_fkey_hours[i].get(), 0)
             m = self._si(self.v_fkey_mins[i].get(),  0)
-            if h == 0 and m == 0:
-                from tkinter import messagebox
-                messagebox.showwarning("경고", f"슬롯 #{i+1}: 지연시간을 1분 이상 설정하세요.")
+            s = self._si(self.v_fkey_secs[i].get(),  0)
+            if h == 0 and m == 0 and s == 0:
+                messagebox.showwarning("경고", f"슬롯 #{i+1}: 지연시간을 1초 이상 설정하세요.")
                 return
             self.fkey_stop_events[i].clear()
             self.fkey_running[i] = True
             self.fkey_btns[i].configure(text="중지")
             key = self.v_fkey_key[i].get()
-            self.fkey_lbls[i].configure(text=f"실행 중 ({h}시간 {m}분)", foreground="#81c784")
-            self._log(f"펑션키 #{i+1} [{key}] 시작 ({h}시간 {m}분마다)", "success")
+            self.fkey_lbls[i].configure(text=f"{h:02d}:{m:02d}:{s:02d}", foreground="#81c784")
+            self._log(f"펑션키 #{i+1} [{key}] 시작 (간격: {h}시간 {m}분 {s}초)", "success")
             threading.Thread(target=self._fkey_worker, args=(i,), daemon=True).start()
 
     def _fkey_worker(self, i):
         while not self.fkey_stop_events[i].is_set():
             h        = self._si(self.v_fkey_hours[i].get(), 0)
             m        = self._si(self.v_fkey_mins[i].get(),  0)
-            interval = h * 3600 + m * 60
-            for _ in range(interval):
+            s        = self._si(self.v_fkey_secs[i].get(),  0)
+            interval = h * 3600 + m * 60 + s
+            if interval < 1:
+                interval = 1
+            for remaining in range(interval, 0, -1):
                 if self.fkey_stop_events[i].is_set():
                     return
+                rem_h = remaining // 3600
+                rem_m = (remaining % 3600) // 60
+                rem_s = remaining % 60
+                self.root.after(0, lambda idx=i, rh=rem_h, rm=rem_m, rs=rem_s:
+                    self.fkey_lbls[idx].config(
+                        text=f"{rh:02d}:{rm:02d}:{rs:02d}",
+                        foreground="#4fc3f7"
+                    ) if idx < len(self.fkey_lbls) else None
+                )
                 time.sleep(1)
             if self.fkey_stop_events[i].is_set():
                 return
@@ -600,7 +619,7 @@ class App:
                     win32api.PostMessage(hwnd, win32con.WM_KEYDOWN, vk, (scan << 16) | 0x0001)
                     time.sleep(0.05)
                     win32api.PostMessage(hwnd, win32con.WM_KEYUP,   vk, 0xC0000000 | (scan << 16) | 0x0001)
-                    self._log(f"펑션키 #{i+1} [{key}] 입력", "info")
+                    self._log(f"펑션키 #{i+1} [{key}] 입력 (간격: {h}시간 {m}분 {s}초)", "info")
                 except Exception as e:
                     self._log(f"펑션키 #{i+1} 실패: {e}", "warning")
             else:
