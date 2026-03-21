@@ -12,10 +12,10 @@ import win32con
 import win32api
 import win32process
 import pystray
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageGrab
 from updater import check_and_update, check_update_on_startup
 
-APP_VERSION  = "1.0.3"
+APP_VERSION  = "1.0.4"
 APP_EXE_NAME = "LineageHP"
 
 CONFIG_FILE = "hp_config.json"
@@ -36,7 +36,9 @@ DEFAULT_CONFIG = {
     "auto_f5_interval":    60,
     "hp_x":    None,
     "hp_y":    None,
+    "hp_x2":   None,
     "hp_color": None,
+    "hp_min_pct": 5,
     "click1_x": None,
     "click1_y": None,
     "click2_x": None,
@@ -151,6 +153,7 @@ class App:
         c["cooldown_sec"]        = self._sf(self.v_cooldown.get(), 20.0)
         c["color_threshold"]     = self._si(self.v_threshold.get(), 60)
         c["confirm_count"]       = self._si(self.v_confirm.get(), 3)
+        c["hp_min_pct"]          = self._si(self.v_hp_min_pct.get(), 5)
         c["lineage_title"]       = self.v_title.get().strip()
         c["hotkey"]              = self.v_hotkey.get().strip()
         c["auto_enter_enabled"]  = bool(self.v_auto_enter.get())
@@ -181,6 +184,7 @@ class App:
         self.v_interval   = tk.StringVar(value=str(cfg["check_interval"]))
         self.v_threshold  = tk.StringVar(value=str(cfg["color_threshold"]))
         self.v_confirm    = tk.StringVar(value=str(cfg["confirm_count"]))
+        self.v_hp_min_pct = tk.StringVar(value=str(cfg.get("hp_min_pct", 5)))
         self.v_title      = tk.StringVar(value=cfg["lineage_title"])
         self.v_hotkey     = tk.StringVar(value=cfg.get("hotkey", "f11"))
         self.v_auto_enter    = tk.BooleanVar(value=cfg.get("auto_enter_enabled", False))
@@ -857,20 +861,41 @@ class App:
         pad.pack(fill="both", expand=True)
 
         # ── HP바 위치 ──
-        hp_f = ttk.LabelFrame(pad, text=" HP바 위치 ", padding="8 6")
+        hp_f = ttk.LabelFrame(pad, text=" HP바 영역 설정 ", padding="8 6")
         hp_f.pack(fill="x", pady=(0, 8))
 
         hr = ttk.Frame(hp_f)
-        hr.pack(fill="x", pady=(0, 6))
-        ttk.Label(hr, text="위치:").pack(side="left")
-        ttk.Label(hr, textvariable=self.v_hp_pos).pack(side="left", padx=(4, 16))
+        hr.pack(fill="x", pady=(0, 4))
+        ttk.Label(hr, text="왼쪽 끝:").pack(side="left")
+        ttk.Label(hr, textvariable=self.v_hp_pos,
+                  foreground="#4fc3f7").pack(side="left", padx=(4, 16))
         ttk.Label(hr, text="색상:").pack(side="left")
         ttk.Label(hr, textvariable=self.v_hp_color).pack(side="left", padx=(4, 0))
 
-        self.btn_capture = ttk.Button(hp_f,
-                                      text="HP바 위치 캡처  (5초 카운트다운)",
+        hr2 = ttk.Frame(hp_f)
+        hr2.pack(fill="x", pady=(0, 6))
+        ttk.Label(hr2, text="오른쪽 끝:").pack(side="left")
+        self.v_hp_pos2 = tk.StringVar(value=(
+            f"({self.config['hp_x2']},{self.config['hp_y']})"
+            if self.config.get("hp_x2") else "미설정"
+        ))
+        ttk.Label(hr2, textvariable=self.v_hp_pos2,
+                  foreground="#4fc3f7").pack(side="left", padx=(4, 16))
+        if self.config.get("hp_x2") and self.config.get("hp_x"):
+            width = self.config["hp_x2"] - self.config["hp_x"]
+            ttk.Label(hr2, text=f"범위: {width}px",
+                      foreground="#81c784").pack(side="left")
+
+        bf2 = ttk.Frame(hp_f)
+        bf2.pack(fill="x", pady=(0, 2))
+        self.btn_capture = ttk.Button(bf2,
+                                      text="① 왼쪽 끝 캡처  (HP바 시작점, 5초)",
                                       command=self._start_calibration)
-        self.btn_capture.pack(fill="x")
+        self.btn_capture.pack(fill="x", pady=(0, 3))
+        self.btn_capture2 = ttk.Button(bf2,
+                                       text="② 오른쪽 끝 캡처  (HP바 끝점, 5초)",
+                                       command=self._start_calibration_right)
+        self.btn_capture2.pack(fill="x")
 
         # ── 감지 설정 ──
         det_f = ttk.LabelFrame(pad, text=" 감지 설정 ", padding="8 6")
@@ -892,7 +917,10 @@ class App:
         row(det_f, 1, "감지 주기(초):",    self.v_interval, 0.1,  5, 0.1,
                        "색상 임계값:",     self.v_threshold, 10, 150,  5)
         row(det_f, 2, "연속 감지 횟수:",   self.v_confirm,  1,   10,  1,
-                       "",                 tk.StringVar(),  0,    1,   1)
+                       "HP% 임계값:",      self.v_hp_min_pct, 1,  30,  1)
+        ttk.Label(det_f, text="  ← HP가 이 % 이하일 때 감지",
+                  foreground="#888888", font=("맑은 고딕", 7)
+                  ).grid(row=2, column=4, sticky="w", padx=(4, 0))
 
         ttk.Label(det_f, text="리니지 창 제목:").grid(row=3, column=0, sticky="w", pady=2)
         title_cb = ttk.Combobox(det_f, textvariable=self.v_title, width=20)
@@ -1364,7 +1392,7 @@ class App:
     # ─── Calibration ─────────────────────────────────────────
     def _start_calibration(self):
         self.btn_capture.configure(state="disabled")
-        self._log("HP바 캡처 시작 - 5초 안에 HP바 왼쪽 끝(빨간 시작점)에 마우스를 올리세요", "warning")
+        self._log("HP바 왼쪽 끝 캡처 - 5초 안에 HP바 시작점(빨간 픽셀)에 마우스를 올리세요", "warning")
         threading.Thread(target=self._calibrate_worker, daemon=True).start()
 
     def _calibrate_worker(self):
@@ -1382,9 +1410,35 @@ class App:
         def _done():
             self._refresh_hp_display()
             self._save_config(show_msg=False)
-            self._log(f"HP바 설정 완료: ({x},{y}) 색상:RGB{color}", "success")
+            self._log(f"[왼쪽 끝] 설정 완료: ({x},{y}) 색상:RGB{color}", "success")
+            self._log("이제 ② 오른쪽 끝도 캡처하면 영역 감지가 활성화됩니다.", "info")
             if self.btn_capture.winfo_exists():
                 self.btn_capture.configure(state="normal")
+        self.root.after(0, _done)
+
+    def _start_calibration_right(self):
+        self.btn_capture2.configure(state="disabled")
+        self._log("HP바 오른쪽 끝 캡처 - 5초 안에 HP바 끝점에 마우스를 올리세요", "warning")
+        threading.Thread(target=self._calibrate_right_worker, daemon=True).start()
+
+    def _calibrate_right_worker(self):
+        for i in range(5, 0, -1):
+            x, y = pyautogui.position()
+            self._log(f"  {i}초... 위치:({x},{y})", "info")
+            time.sleep(1)
+        x, y = pyautogui.position()
+        self.config["hp_x2"] = x
+
+        def _done():
+            self._refresh_hp_display()
+            self._save_config(show_msg=False)
+            x1 = self.config.get("hp_x", 0)
+            width = x - x1
+            self._log(f"[오른쪽 끝] 설정 완료: ({x},{y})  범위: {width}px", "success")
+            if hasattr(self, "v_hp_pos2") and self.v_hp_pos2:
+                self.v_hp_pos2.set(f"({x},{y})")
+            if self.btn_capture2.winfo_exists():
+                self.btn_capture2.configure(state="normal")
         self.root.after(0, _done)
 
     # ─── Monitoring ──────────────────────────────────────────
@@ -1413,16 +1467,43 @@ class App:
     def _monitor_worker(self):
         cfg      = self.config
         x, y     = cfg["hp_x"], cfg["hp_y"]
+        x2       = cfg.get("hp_x2")
         hp_color = tuple(cfg["hp_color"])
         thr      = cfg["color_threshold"]
         conf     = cfg["confirm_count"]
         delay    = cfg["death_delay"]
         cool     = cfg["cooldown_sec"]
         interval = cfg["check_interval"]
+        min_pct  = cfg.get("hp_min_pct", 5)
 
-        dead_count    = 0
-        death_active  = False
+        use_region = (x2 is not None) and (x2 > x + 10)
+
+        dead_count     = 0
+        death_active   = False
         cooldown_until = 0.0
+
+        def _scan_hp():
+            """HP바 영역을 스캔하여 HP 비율(0~100)을 반환. 영역 미설정시 단일픽셀 방식."""
+            if use_region:
+                try:
+                    img = ImageGrab.grab(bbox=(x, y - 2, x2, y + 3))
+                    pixels = img.load()
+                    w, h   = img.size
+                    match  = 0
+                    hr, hg, hb = hp_color
+                    for row in range(h):
+                        for col in range(w):
+                            pr, pg, pb = pixels[col, row][:3]
+                            dist = ((pr-hr)**2 + (pg-hg)**2 + (pb-hb)**2) ** 0.5
+                            if dist <= thr:
+                                match += 1
+                    return (match / (w * h)) * 100
+                except Exception:
+                    return None
+            else:
+                color = self._get_pixel(x, y)
+                dist  = self._color_dist(color, hp_color)
+                return 0.0 if dist > thr else 100.0
 
         while not self.stop_event.is_set():
             now = time.time()
@@ -1431,20 +1512,35 @@ class App:
                 time.sleep(0.5)
                 continue
 
-            color = self._get_pixel(x, y)
-            dist  = self._color_dist(color, hp_color)
-            dead  = dist > thr
+            hp_pct = _scan_hp()
+            if hp_pct is None:
+                time.sleep(interval)
+                continue
+
+            dead = hp_pct < min_pct
 
             if dead:
                 dead_count += 1
+                mode_str = f"영역({x2-x}px)" if use_region else "단일픽셀"
+                self._set_status(
+                    f"HP 위험! {hp_pct:.1f}%  [{dead_count}/{conf}]",
+                    "#e53935"
+                )
             else:
                 dead_count   = 0
                 death_active = False
-                self._set_status("모니터링 중...", "#1565c0")
+                if use_region:
+                    bar = "█" * int(hp_pct / 5)
+                    self._set_status(f"HP {hp_pct:.1f}%  {bar}", "#1565c0")
+                else:
+                    self._set_status("모니터링 중...", "#1565c0")
 
             if dead_count >= conf and not death_active:
                 death_active = True
-                self._log(f"HP=0 감지! (변화:{dist:.0f}) {delay:.0f}초 대기...", "warning")
+                self._log(
+                    f"HP=0 감지! (HP:{hp_pct:.1f}%) {delay:.0f}초 대기...",
+                    "warning"
+                )
                 start = time.time()
                 while time.time() - start < delay:
                     if self.stop_event.is_set():
@@ -1457,6 +1553,7 @@ class App:
                     cooldown_until = time.time() + cool
 
             time.sleep(interval)
+
 
     # ─── Window close ────────────────────────────────────────
     def on_close(self):
