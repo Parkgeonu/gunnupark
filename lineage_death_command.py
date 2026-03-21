@@ -15,7 +15,7 @@ import pystray
 from PIL import Image, ImageDraw, ImageGrab
 from updater import check_and_update, check_update_on_startup
 
-APP_VERSION  = "1.0.5"
+APP_VERSION  = "1.0.6"
 APP_EXE_NAME = "LineageHP"
 
 CONFIG_FILE = "hp_config.json"
@@ -865,8 +865,9 @@ class App:
 
         win = tk.Toplevel(self.root)
         win.title("감지 설정")
-        win.geometry("400x400")
-        win.resizable(False, False)
+        win.geometry("520x720")
+        win.resizable(True, True)
+        win.minsize(480, 600)
         win.transient(self.root)
         self._settings_win = win
 
