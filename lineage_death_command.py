@@ -15,7 +15,7 @@ import pystray
 from PIL import Image, ImageDraw, ImageGrab
 from updater import check_and_update, check_update_on_startup
 
-APP_VERSION  = "1.0.4"
+APP_VERSION  = "1.0.5"
 APP_EXE_NAME = "LineageHP"
 
 CONFIG_FILE = "hp_config.json"
@@ -39,6 +39,10 @@ DEFAULT_CONFIG = {
     "hp_x2":   None,
     "hp_color": None,
     "hp_min_pct": 5,
+    "death_px_x":     None,
+    "death_px_y":     None,
+    "death_px_color": None,
+    "death_px_enabled": False,
     "click1_x": None,
     "click1_y": None,
     "click2_x": None,
@@ -154,6 +158,7 @@ class App:
         c["color_threshold"]     = self._si(self.v_threshold.get(), 60)
         c["confirm_count"]       = self._si(self.v_confirm.get(), 3)
         c["hp_min_pct"]          = self._si(self.v_hp_min_pct.get(), 5)
+        c["death_px_enabled"]    = bool(self.v_death_px_enabled.get())
         c["lineage_title"]       = self.v_title.get().strip()
         c["hotkey"]              = self.v_hotkey.get().strip()
         c["auto_enter_enabled"]  = bool(self.v_auto_enter.get())
@@ -187,6 +192,14 @@ class App:
         self.v_hp_min_pct = tk.StringVar(value=str(cfg.get("hp_min_pct", 5)))
         self.v_title      = tk.StringVar(value=cfg["lineage_title"])
         self.v_hotkey     = tk.StringVar(value=cfg.get("hotkey", "f11"))
+        _dpx = cfg.get("death_px_x")
+        _dpy = cfg.get("death_px_y")
+        self.v_death_px_pos     = tk.StringVar(
+            value=f"({_dpx},{_dpy})" if _dpx is not None else "미설정")
+        self.v_death_px_color   = tk.StringVar(
+            value=str(tuple(cfg["death_px_color"])) if cfg.get("death_px_color") else "미설정")
+        self.v_death_px_enabled = tk.BooleanVar(
+            value=cfg.get("death_px_enabled", False))
         self.v_auto_enter    = tk.BooleanVar(value=cfg.get("auto_enter_enabled", False))
         self.v_ae_interval   = tk.StringVar(value=str(cfg.get("auto_enter_interval", 60)))
         self.v_ae_text       = tk.StringVar(value=cfg.get("auto_enter_text", ""))
@@ -938,6 +951,36 @@ class App:
                   foreground="#888888"
                   ).grid(row=4, column=2, columnspan=2, sticky="w", padx=(14, 0))
 
+        # ── 죽음 화면 보조 감지 ──
+        dp_f = ttk.LabelFrame(pad, text=" 죽음 화면 보조 감지 (선택) ", padding="8 6")
+        dp_f.pack(fill="x", pady=(0, 8))
+
+        dp_info = ttk.Frame(dp_f)
+        dp_info.pack(fill="x", pady=(0, 4))
+        ttk.Label(dp_info, text="위치:").pack(side="left")
+        ttk.Label(dp_info, textvariable=self.v_death_px_pos,
+                  foreground="#ffb74d").pack(side="left", padx=(4, 16))
+        ttk.Label(dp_info, text="색상:").pack(side="left")
+        ttk.Label(dp_info, textvariable=self.v_death_px_color,
+                  foreground="#ffb74d").pack(side="left", padx=(4, 0))
+
+        ttk.Button(dp_f,
+                   text="죽음 화면 픽셀 캡처  (캐릭터 죽은 직후 → 5초 안에 마우스 올리기)",
+                   command=self._start_calibration_death
+                   ).pack(fill="x", pady=(0, 4))
+
+        dp_chk = ttk.Frame(dp_f)
+        dp_chk.pack(fill="x")
+        ttk.Checkbutton(dp_chk,
+                        text="보조 감지 활성화  (HP바 감지 + 죽음 픽셀 감지 동시 사용)",
+                        variable=self.v_death_px_enabled
+                        ).pack(side="left")
+
+        ttk.Label(dp_f,
+                  text="※ 죽으면 나타나는 부활창·메시지 위의 특정 픽셀을 캡처하세요.",
+                  foreground="#888888", font=("맑은 고딕", 7)
+                  ).pack(anchor="w", pady=(4, 0))
+
         # ── 버튼 ──
         bf = ttk.Frame(pad)
         bf.pack(fill="x", pady=(4, 0))
@@ -1441,6 +1484,30 @@ class App:
                 self.btn_capture2.configure(state="normal")
         self.root.after(0, _done)
 
+    def _start_calibration_death(self):
+        self._log("죽음 화면 픽셀 캡처 - 캐릭터 죽은 직후 → 5초 안에 부활창/죽음 메시지 위에 마우스 올리기", "warning")
+        threading.Thread(target=self._calibrate_death_worker, daemon=True).start()
+
+    def _calibrate_death_worker(self):
+        for i in range(5, 0, -1):
+            x, y  = pyautogui.position()
+            color = self._get_pixel(x, y)
+            self._log(f"  {i}초... 위치:({x},{y}) 색상:RGB{color}", "info")
+            time.sleep(1)
+        x, y  = pyautogui.position()
+        color = self._get_pixel(x, y)
+        self.config["death_px_x"]     = x
+        self.config["death_px_y"]     = y
+        self.config["death_px_color"] = list(color)
+
+        def _done():
+            self.v_death_px_pos.set(f"({x},{y})")
+            self.v_death_px_color.set(str(tuple(color)))
+            self._save_config(show_msg=False)
+            self._log(f"[죽음 픽셀] 설정 완료: ({x},{y}) 색상:RGB{color}", "success")
+            self._log("설정 창에서 '보조 감지 활성화'를 체크하면 적용됩니다.", "info")
+        self.root.after(0, _done)
+
     # ─── Monitoring ──────────────────────────────────────────
     def _start_monitoring(self):
         if not self.config.get("hp_x"):
@@ -1476,7 +1543,12 @@ class App:
         interval = cfg["check_interval"]
         min_pct  = cfg.get("hp_min_pct", 5)
 
-        use_region = (x2 is not None) and (x2 > x + 10)
+        use_region  = (x2 is not None) and (x2 > x + 10)
+
+        dpx_x       = cfg.get("death_px_x")
+        dpx_y       = cfg.get("death_px_y")
+        dpx_color   = tuple(cfg["death_px_color"]) if cfg.get("death_px_color") else None
+        use_dpx     = cfg.get("death_px_enabled", False) and all([dpx_x, dpx_y, dpx_color])
 
         dead_count     = 0
         death_active   = False
@@ -1517,13 +1589,25 @@ class App:
                 time.sleep(interval)
                 continue
 
-            dead = hp_pct < min_pct
+            hp_dead  = hp_pct < min_pct
+
+            dpx_dead = False
+            if use_dpx:
+                try:
+                    c = self._get_pixel(dpx_x, dpx_y)
+                    dpx_dead = self._color_dist(c, dpx_color) <= thr
+                except Exception:
+                    pass
+
+            dead = hp_dead or dpx_dead
 
             if dead:
                 dead_count += 1
-                mode_str = f"영역({x2-x}px)" if use_region else "단일픽셀"
+                trigger_src = []
+                if hp_dead:  trigger_src.append(f"HP {hp_pct:.1f}%")
+                if dpx_dead: trigger_src.append("죽음화면 감지")
                 self._set_status(
-                    f"HP 위험! {hp_pct:.1f}%  [{dead_count}/{conf}]",
+                    f"감지! {' + '.join(trigger_src)}  [{dead_count}/{conf}]",
                     "#e53935"
                 )
             else:
@@ -1537,8 +1621,11 @@ class App:
 
             if dead_count >= conf and not death_active:
                 death_active = True
+                trigger_src = []
+                if hp_dead:  trigger_src.append(f"HP:{hp_pct:.1f}%")
+                if dpx_dead: trigger_src.append("죽음화면")
                 self._log(
-                    f"HP=0 감지! (HP:{hp_pct:.1f}%) {delay:.0f}초 대기...",
+                    f"죽음 감지! ({' + '.join(trigger_src)}) {delay:.0f}초 대기...",
                     "warning"
                 )
                 start = time.time()
