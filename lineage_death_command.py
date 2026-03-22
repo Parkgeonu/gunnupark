@@ -15,7 +15,7 @@ import pystray
 from PIL import Image, ImageDraw, ImageGrab
 from updater import check_and_update, check_update_on_startup
 
-APP_VERSION  = "1.0.8"
+APP_VERSION  = "1.1.0"
 APP_EXE_NAME = "LineageHP"
 
 CONFIG_FILE = "hp_config.json"
@@ -71,6 +71,7 @@ DEFAULT_CONFIG = {
     "alt_key_a":       "F6",
     "alt_key_b":       "F7",
     "alt_key_enabled": False,
+    "alt_key_interval_ms": 1000,
 }
 
 
@@ -103,6 +104,8 @@ class App:
         self.lbl_watch_status = None
         self.alt_key_state    = 0
         self.alt_repeat_stop  = threading.Event()
+        self.alt_repeat_on    = False
+        self.alt_key_hook     = None
         self.monitoring      = False
         self.auto_enter_on   = False
         self.auto_f5_on      = False
@@ -187,9 +190,11 @@ class App:
         c["watch_c1_count"]     = self._si(self.v_watch_c1_count.get(), 1)
         c["watch_c2_count"]     = self._si(self.v_watch_c2_count.get(), 1)
         c["watch_c3_count"]     = self._si(self.v_watch_c3_count.get(), 1)
-        c["alt_key_a"]          = self.v_alt_key_a.get()
-        c["alt_key_b"]          = self.v_alt_key_b.get()
-        c["alt_key_enabled"]    = bool(self.v_alt_enabled.get())
+        c["alt_key_trigger"]      = self.v_alt_trigger.get()
+        c["alt_key_a"]            = self.v_alt_key_a.get()
+        c["alt_key_b"]            = self.v_alt_key_b.get()
+        c["alt_key_enabled"]      = bool(self.v_alt_enabled.get())
+        c["alt_key_interval_ms"]  = self._si(self.v_alt_interval_ms.get(), 1000)
 
     # ─── Variable init ───────────────────────────────────────
     def _init_vars(self):
@@ -244,9 +249,11 @@ class App:
         self.v_watch_c2_count = tk.StringVar(value=str(cfg.get("watch_c2_count", 1)))
         self.v_watch_c3_count = tk.StringVar(value=str(cfg.get("watch_c3_count", 1)))
         _fkeys = ["F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12"]
-        self.v_alt_key_a   = tk.StringVar(value=cfg.get("alt_key_a",       "F6"))
-        self.v_alt_key_b   = tk.StringVar(value=cfg.get("alt_key_b",       "F7"))
-        self.v_alt_enabled = tk.BooleanVar(value=cfg.get("alt_key_enabled", False))
+        self.v_alt_trigger     = tk.StringVar(value=cfg.get("alt_key_trigger",    "F5"))
+        self.v_alt_key_a       = tk.StringVar(value=cfg.get("alt_key_a",          "F6"))
+        self.v_alt_key_b       = tk.StringVar(value=cfg.get("alt_key_b",          "F7"))
+        self.v_alt_enabled     = tk.BooleanVar(value=cfg.get("alt_key_enabled",   False))
+        self.v_alt_interval_ms = tk.StringVar(value=str(cfg.get("alt_key_interval_ms", 1000)))
 
     # ─── UI Build ────────────────────────────────────────────
     def _build_ui(self):
@@ -443,7 +450,7 @@ class App:
 
         # ── 번갈아 키 전송 ──
         _fkeys = ["F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12"]
-        alt_f = ttk.LabelFrame(parent, text=" 번갈아 키 전송 (1초마다 자동) ", padding="10 8")
+        alt_f = ttk.LabelFrame(parent, text=" 번갈아 키 연속 전송 ", padding="10 8")
         alt_f.pack(fill="x", pady=(4, 8))
 
         ar1 = ttk.Frame(alt_f)
@@ -452,26 +459,40 @@ class App:
                         variable=self.v_alt_enabled,
                         command=self._toggle_alt_key
                         ).pack(side="left")
-        ttk.Label(ar1, text="키 A:").pack(side="left", padx=(14, 4))
-        ttk.Combobox(ar1, textvariable=self.v_alt_key_a,
+        ttk.Label(ar1, text="트리거 키:").pack(side="left", padx=(14, 4))
+        ttk.Combobox(ar1, textvariable=self.v_alt_trigger,
                      values=_fkeys, state="readonly", width=5
                      ).pack(side="left")
-        ttk.Label(ar1, text="키 B:").pack(side="left", padx=(12, 4))
-        ttk.Combobox(ar1, textvariable=self.v_alt_key_b,
-                     values=_fkeys, state="readonly", width=5
-                     ).pack(side="left")
-        ttk.Label(ar1, text="← 1초마다 A → B → A → B ... 반복 전송",
+        ttk.Label(ar1, text="(이 키로 시작 / 재입력 중지)",
                   foreground="#888888", font=("맑은 고딕", 8)
-                  ).pack(side="left", padx=(10, 0))
+                  ).pack(side="left", padx=(8, 0))
 
         ar2 = ttk.Frame(alt_f)
-        ar2.pack(fill="x")
-        ttk.Label(ar2, text="상태:").pack(side="left")
-        self.lbl_alt_status = ttk.Label(ar2, text="꺼짐", foreground="#888888",
+        ar2.pack(fill="x", pady=(0, 6))
+        ttk.Label(ar2, text="키 A:").pack(side="left")
+        ttk.Combobox(ar2, textvariable=self.v_alt_key_a,
+                     values=_fkeys, state="readonly", width=5
+                     ).pack(side="left", padx=(4, 0))
+        ttk.Label(ar2, text="키 B:").pack(side="left", padx=(12, 4))
+        ttk.Combobox(ar2, textvariable=self.v_alt_key_b,
+                     values=_fkeys, state="readonly", width=5
+                     ).pack(side="left")
+        ttk.Label(ar2, text="간격(ms):").pack(side="left", padx=(16, 4))
+        ttk.Spinbox(ar2, from_=50, to=60000, increment=50,
+                    textvariable=self.v_alt_interval_ms, width=7
+                    ).pack(side="left")
+        ttk.Label(ar2, text="← A→B→A→B 반복",
+                  foreground="#888888", font=("맑은 고딕", 8)
+                  ).pack(side="left", padx=(8, 0))
+
+        ar3 = ttk.Frame(alt_f)
+        ar3.pack(fill="x")
+        ttk.Label(ar3, text="상태:").pack(side="left")
+        self.lbl_alt_status = ttk.Label(ar3, text="꺼짐", foreground="#888888",
                                         font=("맑은 고딕", 9, "bold"))
         self.lbl_alt_status.pack(side="left", padx=(6, 0))
-        ttk.Label(ar2, text="  방금:").pack(side="left", padx=(12, 0))
-        self.lbl_alt_next = ttk.Label(ar2, text="-", foreground="#4fc3f7",
+        ttk.Label(ar3, text="  방금:").pack(side="left", padx=(12, 0))
+        self.lbl_alt_next = ttk.Label(ar3, text="-", foreground="#4fc3f7",
                                       font=("맑은 고딕", 9, "bold"))
         self.lbl_alt_next.pack(side="left", padx=(4, 0))
 
@@ -1152,6 +1173,7 @@ class App:
             ev.set()
         self.watch_stop_event.set()
         self.alt_repeat_stop.set()
+        self._unregister_alt_hook()
         try: kb.unhook_all_hotkeys()
         except Exception: pass
         if self.tray_icon:
@@ -1260,34 +1282,71 @@ class App:
             else:
                 self._log("자동 F5: 리니지 창 없음", "warning")
 
-    # ─── Alt Key (번갈아 키 전송) ────────────────────────────
+    # ─── Alt Key (번갈아 키 연속 전송) ──────────────────────
     def _toggle_alt_key(self):
         if self.v_alt_enabled.get():
-            self.alt_repeat_stop.clear()
-            self.alt_key_state = 0
-            key_a = self.v_alt_key_a.get()
-            key_b = self.v_alt_key_b.get()
-            threading.Thread(target=self._alt_repeat_worker, daemon=True).start()
-            self.root.after(0, lambda: (
-                self.lbl_alt_status.configure(
-                    text=f"켜짐  A:{key_a} / B:{key_b}  (1초마다)", foreground="#81c784"),
-                self.lbl_alt_next.configure(text="-")
-            ))
-            self._log(f"번갈아 키 전송 시작  A:{key_a}  B:{key_b}  (1초마다)", "success")
+            self._register_alt_hook()
+            trigger = self.v_alt_trigger.get()
+            self.root.after(0, lambda: self.lbl_alt_status.configure(
+                text=f"대기 중  [{trigger}] 누르면 시작", foreground="#ffb74d"))
+            self._log(f"번갈아 키 활성  트리거:{trigger}  A:{self.v_alt_key_a.get()}  B:{self.v_alt_key_b.get()}", "success")
         else:
-            self.alt_repeat_stop.set()
+            self._unregister_alt_hook()
+            self._stop_alt_repeat()
             self.root.after(0, lambda: (
                 self.lbl_alt_status.configure(text="꺼짐", foreground="#888888"),
                 self.lbl_alt_next.configure(text="-")
             ))
-            self._log("번갈아 키 전송 중지", "warning")
+            self._log("번갈아 키 전송 비활성", "warning")
+
+    def _register_alt_hook(self):
+        self._unregister_alt_hook()
+        trigger = self.v_alt_trigger.get().lower()
+        try:
+            self.alt_key_hook = kb.hook_key(trigger, self._alt_trigger_event, suppress=True)
+        except Exception as e:
+            self._log(f"번갈아 키 훅 실패: {e}", "warning")
+
+    def _unregister_alt_hook(self):
+        if self.alt_key_hook is not None:
+            try:    kb.unhook(self.alt_key_hook)
+            except Exception: pass
+            self.alt_key_hook = None
+
+    def _alt_trigger_event(self, event):
+        if event.event_type != "down":
+            return
+        if self.alt_repeat_on:
+            self._stop_alt_repeat()
+        else:
+            self._start_alt_repeat()
+
+    def _start_alt_repeat(self):
+        self.alt_repeat_stop.clear()
+        self.alt_key_state = 0
+        self.alt_repeat_on = True
+        ms  = self._si(self.v_alt_interval_ms.get(), 1000)
+        key_a = self.v_alt_key_a.get()
+        key_b = self.v_alt_key_b.get()
+        threading.Thread(target=self._alt_repeat_worker, daemon=True).start()
+        self.root.after(0, lambda: self.lbl_alt_status.configure(
+            text=f"전송 중  A:{key_a} / B:{key_b}  {ms}ms", foreground="#81c784"))
+        self._log(f"번갈아 키 전송 시작  A:{key_a}  B:{key_b}  간격:{ms}ms", "success")
+
+    def _stop_alt_repeat(self):
+        self.alt_repeat_stop.set()
+        self.alt_repeat_on = False
+        trigger = self.v_alt_trigger.get()
+        self.root.after(0, lambda: (
+            self.lbl_alt_status.configure(
+                text=f"대기 중  [{trigger}] 누르면 시작", foreground="#ffb74d"),
+            self.lbl_alt_next.configure(text="-")
+        ))
+        self._log("번갈아 키 전송 중지 (트리거 키 재입력으로 재시작)", "warning")
 
     def _alt_repeat_worker(self):
         while not self.alt_repeat_stop.is_set():
-            if self.alt_key_state == 0:
-                key = self.v_alt_key_a.get()
-            else:
-                key = self.v_alt_key_b.get()
+            key = self.v_alt_key_a.get() if self.alt_key_state == 0 else self.v_alt_key_b.get()
             self.alt_key_state ^= 1
             vk, scan = self._FK_VK.get(key, (win32con.VK_F5, 0x3F))
             hwnd = self._find_lineage_hwnd()
@@ -1299,10 +1358,11 @@ class App:
                     self._log(f"번갈아 키: [{key}] 전송", "info")
                     self.root.after(0, lambda k=key: self.lbl_alt_next.configure(text=k))
                 except Exception as e:
-                    self._log(f"번갈아 키 전송 실패: {e}", "warning")
+                    self._log(f"번갈아 키 실패: {e}", "warning")
             else:
                 self._log("번갈아 키: 리니지 창 없음", "warning")
-            self.alt_repeat_stop.wait(1.0)
+            ms = max(50, self._si(self.v_alt_interval_ms.get(), 1000))
+            self.alt_repeat_stop.wait(ms / 1000.0)
 
     # ─── Auto Click ──────────────────────────────────────────
     def _start_coord_capture(self, num):
