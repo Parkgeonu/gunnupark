@@ -15,7 +15,7 @@ import pystray
 from PIL import Image, ImageDraw, ImageGrab
 from updater import check_and_update, check_update_on_startup
 
-APP_VERSION  = "1.1.0"
+APP_VERSION  = "1.1.1"
 APP_EXE_NAME = "LineageHP"
 
 CONFIG_FILE = "hp_config.json"
@@ -192,7 +192,6 @@ class App:
         c["watch_c3_count"]     = self._si(self.v_watch_c3_count.get(), 1)
         c["alt_key_trigger"]      = self.v_alt_trigger.get()
         c["alt_key_a"]            = self.v_alt_key_a.get()
-        c["alt_key_b"]            = self.v_alt_key_b.get()
         c["alt_key_enabled"]      = bool(self.v_alt_enabled.get())
         c["alt_key_interval_ms"]  = self._si(self.v_alt_interval_ms.get(), 1000)
 
@@ -251,7 +250,6 @@ class App:
         _fkeys = ["F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12"]
         self.v_alt_trigger     = tk.StringVar(value=cfg.get("alt_key_trigger",    "F5"))
         self.v_alt_key_a       = tk.StringVar(value=cfg.get("alt_key_a",          "F6"))
-        self.v_alt_key_b       = tk.StringVar(value=cfg.get("alt_key_b",          "F7"))
         self.v_alt_enabled     = tk.BooleanVar(value=cfg.get("alt_key_enabled",   False))
         self.v_alt_interval_ms = tk.StringVar(value=str(cfg.get("alt_key_interval_ms", 1000)))
 
@@ -469,19 +467,15 @@ class App:
 
         ar2 = ttk.Frame(alt_f)
         ar2.pack(fill="x", pady=(0, 6))
-        ttk.Label(ar2, text="키 A:").pack(side="left")
+        ttk.Label(ar2, text="반복 키:").pack(side="left")
         ttk.Combobox(ar2, textvariable=self.v_alt_key_a,
                      values=_fkeys, state="readonly", width=5
                      ).pack(side="left", padx=(4, 0))
-        ttk.Label(ar2, text="키 B:").pack(side="left", padx=(12, 4))
-        ttk.Combobox(ar2, textvariable=self.v_alt_key_b,
-                     values=_fkeys, state="readonly", width=5
-                     ).pack(side="left")
         ttk.Label(ar2, text="간격(ms):").pack(side="left", padx=(16, 4))
         ttk.Spinbox(ar2, from_=50, to=60000, increment=50,
                     textvariable=self.v_alt_interval_ms, width=7
                     ).pack(side="left")
-        ttk.Label(ar2, text="← A→B→A→B 반복",
+        ttk.Label(ar2, text="← [트리거키 1번 + 반복키 1번] 세트 반복",
                   foreground="#888888", font=("맑은 고딕", 8)
                   ).pack(side="left", padx=(8, 0))
 
@@ -1289,7 +1283,7 @@ class App:
             trigger = self.v_alt_trigger.get()
             self.root.after(0, lambda: self.lbl_alt_status.configure(
                 text=f"대기 중  [{trigger}] 누르면 시작", foreground="#ffb74d"))
-            self._log(f"번갈아 키 활성  트리거:{trigger}  A:{self.v_alt_key_a.get()}  B:{self.v_alt_key_b.get()}", "success")
+            self._log(f"연속 전송 활성  트리거:{trigger}  반복키:{self.v_alt_key_a.get()}", "success")
         else:
             self._unregister_alt_hook()
             self._stop_alt_repeat()
@@ -1323,15 +1317,14 @@ class App:
 
     def _start_alt_repeat(self):
         self.alt_repeat_stop.clear()
-        self.alt_key_state = 0
         self.alt_repeat_on = True
-        ms  = self._si(self.v_alt_interval_ms.get(), 1000)
-        key_a = self.v_alt_key_a.get()
-        key_b = self.v_alt_key_b.get()
+        ms      = self._si(self.v_alt_interval_ms.get(), 1000)
+        trigger = self.v_alt_trigger.get()
+        key_a   = self.v_alt_key_a.get()
         threading.Thread(target=self._alt_repeat_worker, daemon=True).start()
         self.root.after(0, lambda: self.lbl_alt_status.configure(
-            text=f"전송 중  A:{key_a} / B:{key_b}  {ms}ms", foreground="#81c784"))
-        self._log(f"번갈아 키 전송 시작  A:{key_a}  B:{key_b}  간격:{ms}ms", "success")
+            text=f"전송 중  [{trigger}+{key_a}]  {ms}ms", foreground="#81c784"))
+        self._log(f"연속 전송 시작  [{trigger}+{key_a}]  간격:{ms}ms", "success")
 
     def _stop_alt_repeat(self):
         self.alt_repeat_stop.set()
@@ -1342,25 +1335,31 @@ class App:
                 text=f"대기 중  [{trigger}] 누르면 시작", foreground="#ffb74d"),
             self.lbl_alt_next.configure(text="-")
         ))
-        self._log("번갈아 키 전송 중지 (트리거 키 재입력으로 재시작)", "warning")
+        self._log("연속 전송 중지 (트리거 키 재입력으로 재시작)", "warning")
 
     def _alt_repeat_worker(self):
         while not self.alt_repeat_stop.is_set():
-            key = self.v_alt_key_a.get() if self.alt_key_state == 0 else self.v_alt_key_b.get()
-            self.alt_key_state ^= 1
-            vk, scan = self._FK_VK.get(key, (win32con.VK_F5, 0x3F))
+            trigger  = self.v_alt_trigger.get()
+            key_a    = self.v_alt_key_a.get()
+            vk_t, sc_t = self._FK_VK.get(trigger, (win32con.VK_F5, 0x3F))
+            vk_a, sc_a = self._FK_VK.get(key_a,   (win32con.VK_F6, 0x40))
             hwnd = self._find_lineage_hwnd()
             if hwnd:
                 try:
-                    win32api.PostMessage(hwnd, win32con.WM_KEYDOWN, vk, (scan << 16) | 0x0001)
+                    win32api.PostMessage(hwnd, win32con.WM_KEYDOWN, vk_t, (sc_t << 16) | 0x0001)
                     time.sleep(0.05)
-                    win32api.PostMessage(hwnd, win32con.WM_KEYUP,   vk, 0xC0000000 | (scan << 16) | 0x0001)
-                    self._log(f"번갈아 키: [{key}] 전송", "info")
-                    self.root.after(0, lambda k=key: self.lbl_alt_next.configure(text=k))
+                    win32api.PostMessage(hwnd, win32con.WM_KEYUP,   vk_t, 0xC0000000 | (sc_t << 16) | 0x0001)
+                    time.sleep(0.05)
+                    win32api.PostMessage(hwnd, win32con.WM_KEYDOWN, vk_a, (sc_a << 16) | 0x0001)
+                    time.sleep(0.05)
+                    win32api.PostMessage(hwnd, win32con.WM_KEYUP,   vk_a, 0xC0000000 | (sc_a << 16) | 0x0001)
+                    label = f"{trigger}+{key_a}"
+                    self._log(f"전송: [{label}]", "info")
+                    self.root.after(0, lambda lb=label: self.lbl_alt_next.configure(text=lb))
                 except Exception as e:
-                    self._log(f"번갈아 키 실패: {e}", "warning")
+                    self._log(f"연속 전송 실패: {e}", "warning")
             else:
-                self._log("번갈아 키: 리니지 창 없음", "warning")
+                self._log("연속 전송: 리니지 창 없음", "warning")
             ms = max(50, self._si(self.v_alt_interval_ms.get(), 1000))
             self.alt_repeat_stop.wait(ms / 1000.0)
 
