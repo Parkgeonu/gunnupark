@@ -15,7 +15,7 @@ import pystray
 from PIL import Image, ImageDraw, ImageGrab
 from updater import check_and_update, check_update_on_startup
 
-APP_VERSION  = "1.1.3"
+APP_VERSION  = "1.1.4"
 APP_EXE_NAME = "LineageHP"
 
 CONFIG_FILE = "hp_config.json"
@@ -59,8 +59,11 @@ DEFAULT_CONFIG = {
         {"key": "F10", "hours": 0, "mins": 5},
     ],
     "watch_delay":        30,
-    "watch_px_threshold": 3,
+    "watch_px_threshold": 10,
     "watch_region":       None,
+    "watch_px_x":         None,
+    "watch_px_y":         None,
+    "watch_px_color":     None,
     "watch_c1_x": None, "watch_c1_y": None,
     "watch_c2_x": None, "watch_c2_y": None,
     "watch_c3_x": None, "watch_c3_y": None,
@@ -234,10 +237,17 @@ class App:
         self.v_fkey_mins  = [tk.StringVar(value=str(_slots[i].get("mins",  0))) for i in range(6)]
         self.v_fkey_secs  = [tk.StringVar(value=str(_slots[i].get("secs",  0))) for i in range(6)]
         self.v_watch_delay  = tk.StringVar(value=str(cfg.get("watch_delay", 30)))
-        self.v_watch_px_thr = tk.StringVar(value=str(cfg.get("watch_px_threshold", 3)))
+        self.v_watch_px_thr = tk.StringVar(value=str(cfg.get("watch_px_threshold", 10)))
         r = cfg.get("watch_region")
         self.v_watch_region = tk.StringVar(
             value=f"({r[0]},{r[1]}) {r[2]}×{r[3]}" if r else "미설정")
+        _px = cfg.get("watch_px_x")
+        _py = cfg.get("watch_px_y")
+        _pc = cfg.get("watch_px_color")
+        self.v_watch_px_pos   = tk.StringVar(
+            value=f"({_px}, {_py})" if _px is not None else "미설정")
+        self.v_watch_px_color = tk.StringVar(
+            value=f"RGB({_pc[0]}, {_pc[1]}, {_pc[2]})" if _pc else "미설정")
         def _wpos(k1, k2):
             x, y = cfg.get(k1), cfg.get(k2)
             return f"({x}, {y})" if x is not None else "미설정"
@@ -690,31 +700,38 @@ class App:
     # ── Tab 5: 클라이언트 감시 ───────────────────────────────
     def _build_tab_watch(self, parent):
         ttk.Label(parent,
-                  text="감시 영역의 화면 픽셀 변화를 감지  |  변화 없으면 카운트 후 클릭 실행",
+                  text="감시 픽셀의 RGB 색상을 기준으로 변화 감지  |  변화 없으면 카운트 후 클릭 실행",
                   foreground="#888888", font=("맑은 고딕", 8)
                   ).pack(anchor="w", pady=(0, 4))
 
-        # ── 감시 영역 설정 ──
-        rf = ttk.LabelFrame(parent, text=" 감시 영역 (화면 픽셀 비교) ", padding="8 6")
+        # ── 감시 픽셀 (RGB) 설정 ──
+        rf = ttk.LabelFrame(parent, text=" 감시 픽셀 (RGB 색 비교) ", padding="8 6")
         rf.pack(fill="x", pady=(0, 5))
 
         rr1 = ttk.Frame(rf)
         rr1.pack(fill="x", pady=(0, 4))
-        ttk.Label(rr1, text="영역:").pack(side="left")
-        ttk.Label(rr1, textvariable=self.v_watch_region,
+        ttk.Label(rr1, text="픽셀 위치:").pack(side="left")
+        ttk.Label(rr1, textvariable=self.v_watch_px_pos,
                   foreground="#4fc3f7", font=("Consolas", 9)
                   ).pack(side="left", padx=(6, 10))
-        self.btn_watch_region = ttk.Button(rr1, text="영역 설정 (좌상→우하 각 3초)",
+        self.btn_watch_region = ttk.Button(rr1, text="픽셀 캡처 (3초)",
                                            command=self._start_watch_region_capture)
         self.btn_watch_region.pack(side="left")
 
         rr2 = ttk.Frame(rf)
-        rr2.pack(fill="x")
-        ttk.Label(rr2, text="변화 감도 (픽셀 평균차):").pack(side="left")
-        ttk.Spinbox(rr2, from_=1, to=50, increment=1,
+        rr2.pack(fill="x", pady=(0, 4))
+        ttk.Label(rr2, text="기준 색상:").pack(side="left")
+        self.lbl_watch_color = ttk.Label(rr2, textvariable=self.v_watch_px_color,
+                                         foreground="#aed581", font=("Consolas", 9))
+        self.lbl_watch_color.pack(side="left", padx=(6, 0))
+
+        rr3 = ttk.Frame(rf)
+        rr3.pack(fill="x")
+        ttk.Label(rr3, text="감도 (색 거리):").pack(side="left")
+        ttk.Spinbox(rr3, from_=1, to=200, increment=5,
                     textvariable=self.v_watch_px_thr, width=5
                     ).pack(side="left", padx=(6, 0))
-        ttk.Label(rr2, text="  낮을수록 민감 (권장: 3~10)",
+        ttk.Label(rr3, text="  낮을수록 민감 (권장: 10~30, 최대 255)",
                   foreground="#888888", font=("맑은 고딕", 8)
                   ).pack(side="left", padx=(4, 0))
 
@@ -775,35 +792,32 @@ class App:
                                          command=self._toggle_watch_off)
         self.btn_watch_stop.pack(side="left")
 
-    # ─── Watch Region Capture ─────────────────────────────────
+    # ─── Watch Pixel Capture ──────────────────────────────────
     def _start_watch_region_capture(self):
         self.btn_watch_region.configure(state="disabled")
-        self._log("감시 영역 설정 - [좌상단] 3초 후 마우스 위치로 캡처...", "warning")
+        self._log("감시 픽셀 설정 - 3초 후 마우스 위치의 픽셀을 캡처합니다...", "warning")
         threading.Thread(target=self._watch_region_worker, daemon=True).start()
 
     def _watch_region_worker(self):
         for i in range(3, 0, -1):
             x, y = pyautogui.position()
-            self._log(f"  좌상단 {i}초... ({x},{y})", "info")
+            self._log(f"  {i}초... 현재 위치 ({x},{y})", "info")
             time.sleep(1)
-        x1, y1 = pyautogui.position()
-        self._log(f"좌상단 확정: ({x1},{y1})  →  [우하단] 3초 후 위치로 캡처...", "warning")
-        for i in range(3, 0, -1):
-            x, y = pyautogui.position()
-            self._log(f"  우하단 {i}초... ({x},{y})", "info")
-            time.sleep(1)
-        x2, y2 = pyautogui.position()
-        w, h = abs(x2 - x1), abs(y2 - y1)
-        rx, ry = min(x1, x2), min(y1, y2)
-        if w < 10 or h < 10:
-            self._log("영역이 너무 작습니다. 다시 설정하세요.", "error")
-            self.root.after(0, lambda: self.btn_watch_region.configure(state="normal"))
-            return
-        self.config["watch_region"] = [rx, ry, w, h]
+        px, py = pyautogui.position()
+        color  = self._get_pixel(px, py)
+        self.config["watch_px_x"]     = px
+        self.config["watch_px_y"]     = py
+        self.config["watch_px_color"] = list(color)
+        hex_col = "#{:02X}{:02X}{:02X}".format(*color)
         def _done():
-            self.v_watch_region.set(f"({rx},{ry}) {w}×{h}")
+            self.v_watch_px_pos.set(f"({px}, {py})")
+            self.v_watch_px_color.set(f"RGB({color[0]}, {color[1]}, {color[2]})  {hex_col}")
+            try:
+                self.lbl_watch_color.configure(foreground=hex_col)
+            except Exception:
+                pass
             self._save_config(show_msg=False)
-            self._log(f"감시 영역 설정 완료: ({rx},{ry}) {w}×{h}", "success")
+            self._log(f"감시 픽셀 설정 완료: ({px},{py})  {hex_col}", "success")
             self.btn_watch_region.configure(state="normal")
         self.root.after(0, _done)
 
@@ -834,8 +848,8 @@ class App:
 
     # ─── Watch Toggle / Worker ────────────────────────────────
     def _toggle_watch_on(self):
-        if not self.config.get("watch_region"):
-            messagebox.showwarning("경고", "감시 영역을 먼저 설정하세요.")
+        if self.config.get("watch_px_x") is None or self.config.get("watch_px_color") is None:
+            messagebox.showwarning("경고", "감시 픽셀을 먼저 캡처하세요.")
             return
         if not all(self.config.get(f"watch_c{n}_x") is not None for n in (1, 2, 3)):
             messagebox.showwarning("경고", "1~3차 좌표를 모두 캡처하세요.")
@@ -864,37 +878,35 @@ class App:
         self.root.after(0, _do)
 
     def _watch_worker(self):
-        import numpy as np
-        INTERVAL  = 0.5
-        idle      = 0.0
-        prev_arr  = None
-        region    = self.config.get("watch_region")  # [x, y, w, h]
+        INTERVAL = 0.5
+        idle     = 0.0
 
         while not self.watch_stop_event.is_set():
             time.sleep(INTERVAL)
             if self.watch_stop_event.is_set():
                 break
 
+            px_x   = self.config.get("watch_px_x")
+            px_y   = self.config.get("watch_px_y")
+            ref    = self.config.get("watch_px_color")
+            if px_x is None or ref is None:
+                continue
+
             try:
-                img  = pyautogui.screenshot(region=tuple(region))
-                curr = np.array(img, dtype=np.int16)
+                curr = self._get_pixel(px_x, px_y)
             except Exception as e:
-                self._log(f"스크린샷 실패: {e}", "warning")
-                prev_arr = None
+                self._log(f"픽셀 캡처 실패: {e}", "warning")
                 continue
 
-            if prev_arr is None:
-                prev_arr = curr
-                continue
+            r, g, b = curr[0], curr[1], curr[2]
+            dist = ((r - ref[0])**2 + (g - ref[1])**2 + (b - ref[2])**2) ** 0.5
+            thr  = max(1, self._si(self.v_watch_px_thr.get(), 10))
 
-            diff     = float(np.mean(np.abs(curr - prev_arr)))
-            thr      = max(1, self._si(self.v_watch_px_thr.get(), 3))
-            prev_arr = curr
-
-            if diff >= thr:
+            if dist >= thr:
                 idle = 0.0
                 self._watch_set_status(
-                    f"화면 변화 감지 (변화량: {diff:.1f}) - 타이머 초기화", "#4fc3f7", 0)
+                    f"색 변화 감지 (색 거리: {dist:.1f})  RGB({r},{g},{b}) - 타이머 초기화",
+                    "#4fc3f7", 0)
                 continue
 
             idle += INTERVAL
@@ -902,11 +914,10 @@ class App:
             pct   = min(100, idle / delay * 100)
             rem   = max(0.0, delay - idle)
             self._watch_set_status(
-                f"변화 없음 {diff:.1f} | 대기 중... {rem:.0f}초 후 실행", "#ffb74d", pct)
+                f"색 유지 (거리: {dist:.1f}) | {rem:.0f}초 후 실행", "#ffb74d", pct)
 
             if idle >= delay:
-                idle     = 0.0
-                prev_arr = None
+                idle = 0.0
                 self._watch_execute_sequence()
 
     def _watch_execute_sequence(self):
