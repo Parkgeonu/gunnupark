@@ -15,7 +15,7 @@ import pystray
 from PIL import Image, ImageDraw, ImageGrab
 from updater import check_and_update, check_update_on_startup
 
-APP_VERSION  = "1.1.2"
+APP_VERSION  = "1.1.3"
 APP_EXE_NAME = "LineageHP"
 
 CONFIG_FILE = "hp_config.json"
