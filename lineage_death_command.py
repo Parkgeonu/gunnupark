@@ -15,7 +15,7 @@ import pystray
 from PIL import Image, ImageDraw, ImageGrab
 from updater import check_and_update, check_update_on_startup
 
-APP_VERSION  = "1.1.4"
+APP_VERSION  = "1.1.5"
 APP_EXE_NAME = "LineageHP"
 
 CONFIG_FILE = "hp_config.json"
@@ -743,7 +743,7 @@ class App:
         for num, var, label in [
             (1, self.v_watch_c1_pos, "1차 (감지 후):  "),
             (2, self.v_watch_c2_pos, "2차 (바로 이동):"),
-            (3, self.v_watch_c3_pos, "3차 (1분 후):   "),
+            (3, self.v_watch_c3_pos, "3차 (5초 후):   "),
         ]:
             row = ttk.Frame(cf)
             row.pack(fill="x", pady=2)
@@ -939,7 +939,7 @@ class App:
         time.sleep(0.5)
         _click_n("watch_c2_x", "watch_c2_y", "2차", "watch_c2_count")
 
-        for i in range(60, 0, -1):
+        for i in range(5, 0, -1):
             if self.watch_stop_event.is_set():
                 return
             self._watch_set_status(f"3차 클릭까지... {i}초", "#4fc3f7", 0)
