@@ -15,7 +15,7 @@ import pystray
 from PIL import Image, ImageDraw, ImageGrab
 from updater import check_and_update, check_update_on_startup
 
-APP_VERSION  = "1.1.1"
+APP_VERSION  = "1.1.2"
 APP_EXE_NAME = "LineageHP"
 
 CONFIG_FILE = "hp_config.json"
@@ -1297,7 +1297,7 @@ class App:
         self._unregister_alt_hook()
         trigger = self.v_alt_trigger.get().lower()
         try:
-            self.alt_key_hook = kb.hook_key(trigger, self._alt_trigger_event, suppress=True)
+            self.alt_key_hook = kb.hook_key(trigger, self._alt_trigger_event, suppress=False)
         except Exception as e:
             self._log(f"번갈아 키 훅 실패: {e}", "warning")
 
