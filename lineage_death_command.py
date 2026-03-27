@@ -15,7 +15,7 @@ import pystray
 from PIL import Image, ImageDraw, ImageGrab
 from updater import check_and_update, check_update_on_startup
 
-APP_VERSION  = "1.1.7"
+APP_VERSION  = "1.1.8"
 APP_EXE_NAME = "LineageHP"
 
 CONFIG_FILE = "hp_config.json"
@@ -316,10 +316,10 @@ class App:
         nb = ttk.Notebook(pad)
         nb.pack(fill="both", expand=True, pady=(0, 6))
 
-        # Tab 1 : 수배 명령어
-        t1 = ttk.Frame(nb, padding="8 6")
-        nb.add(t1, text="   수배 명령어   ")
-        self._build_tab_subae(t1)
+        # Tab 1 : 수배 명령어 (숨김)
+        # t1 = ttk.Frame(nb, padding="8 6")
+        # nb.add(t1, text="   수배 명령어   ")
+        # self._build_tab_subae(t1)
 
         # Tab 2 : 자동 엔터
         t2 = ttk.Frame(nb, padding="8 6")
