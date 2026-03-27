@@ -15,7 +15,7 @@ import pystray
 from PIL import Image, ImageDraw, ImageGrab
 from updater import check_and_update, check_update_on_startup
 
-APP_VERSION  = "1.1.5"
+APP_VERSION  = "1.1.6"
 APP_EXE_NAME = "LineageHP"
 
 CONFIG_FILE = "hp_config.json"
@@ -64,6 +64,9 @@ DEFAULT_CONFIG = {
     "watch_px_x":         None,
     "watch_px_y":         None,
     "watch_px_color":     None,
+    "watch_hp_min_pct":   5,
+    "watch_hp_confirm":   3,
+    "watch_hp_cooldown":  30,
     "watch_c1_x": None, "watch_c1_y": None,
     "watch_c2_x": None, "watch_c2_y": None,
     "watch_c3_x": None, "watch_c3_y": None,
@@ -189,7 +192,10 @@ class App:
             for i in range(6)
         ]
         c["watch_delay"]        = self._si(self.v_watch_delay.get(), 30)
-        c["watch_px_threshold"] = self._si(self.v_watch_px_thr.get(), 3)
+        c["watch_px_threshold"] = self._si(self.v_watch_px_thr.get(), 10)
+        c["watch_hp_min_pct"]   = self._si(self.v_watch_hp_min.get(),  5)
+        c["watch_hp_confirm"]   = self._si(self.v_watch_hp_conf.get(), 3)
+        c["watch_hp_cooldown"]  = self._si(self.v_watch_hp_cool.get(), 30)
         c["watch_c1_count"]     = self._si(self.v_watch_c1_count.get(), 1)
         c["watch_c2_count"]     = self._si(self.v_watch_c2_count.get(), 1)
         c["watch_c3_count"]     = self._si(self.v_watch_c3_count.get(), 1)
@@ -236,8 +242,11 @@ class App:
         self.v_fkey_hours = [tk.StringVar(value=str(_slots[i].get("hours", 0))) for i in range(6)]
         self.v_fkey_mins  = [tk.StringVar(value=str(_slots[i].get("mins",  0))) for i in range(6)]
         self.v_fkey_secs  = [tk.StringVar(value=str(_slots[i].get("secs",  0))) for i in range(6)]
-        self.v_watch_delay  = tk.StringVar(value=str(cfg.get("watch_delay", 30)))
-        self.v_watch_px_thr = tk.StringVar(value=str(cfg.get("watch_px_threshold", 10)))
+        self.v_watch_delay    = tk.StringVar(value=str(cfg.get("watch_delay", 30)))
+        self.v_watch_px_thr   = tk.StringVar(value=str(cfg.get("watch_px_threshold", 10)))
+        self.v_watch_hp_min   = tk.StringVar(value=str(cfg.get("watch_hp_min_pct",  5)))
+        self.v_watch_hp_conf  = tk.StringVar(value=str(cfg.get("watch_hp_confirm",  3)))
+        self.v_watch_hp_cool  = tk.StringVar(value=str(cfg.get("watch_hp_cooldown", 30)))
         r = cfg.get("watch_region")
         self.v_watch_region = tk.StringVar(
             value=f"({r[0]},{r[1]}) {r[2]}×{r[3]}" if r else "미설정")
@@ -700,38 +709,45 @@ class App:
     # ── Tab 5: 클라이언트 감시 ───────────────────────────────
     def _build_tab_watch(self, parent):
         ttk.Label(parent,
-                  text="감시 픽셀의 RGB 색상을 기준으로 변화 감지  |  변화 없으면 카운트 후 클릭 실행",
+                  text="탭1 HP 설정 기준으로 HP를 실시간 감시  |  HP=0 감지 시 수배 명령어 자동 실행",
                   foreground="#888888", font=("맑은 고딕", 8)
                   ).pack(anchor="w", pady=(0, 4))
 
-        # ── 감시 픽셀 (RGB) 설정 ──
-        rf = ttk.LabelFrame(parent, text=" 감시 픽셀 (RGB 색 비교) ", padding="8 6")
+        # ── HP 실시간 감시 설정 ──
+        rf = ttk.LabelFrame(parent, text=" HP 실시간 감시 설정 ", padding="8 6")
         rf.pack(fill="x", pady=(0, 5))
 
         rr1 = ttk.Frame(rf)
         rr1.pack(fill="x", pady=(0, 4))
-        ttk.Label(rr1, text="픽셀 위치:").pack(side="left")
-        ttk.Label(rr1, textvariable=self.v_watch_px_pos,
-                  foreground="#4fc3f7", font=("Consolas", 9)
-                  ).pack(side="left", padx=(6, 10))
-        self.btn_watch_region = ttk.Button(rr1, text="픽셀 캡처 (3초)",
-                                           command=self._start_watch_region_capture)
-        self.btn_watch_region.pack(side="left")
+        ttk.Label(rr1, text="HP 기준:").pack(side="left")
+        ttk.Label(rr1, text="탭1 HP 설정 자동 사용 (별도 설정 불필요)",
+                  foreground="#aed581", font=("맑은 고딕", 8)
+                  ).pack(side="left", padx=(6, 0))
 
         rr2 = ttk.Frame(rf)
         rr2.pack(fill="x", pady=(0, 4))
-        ttk.Label(rr2, text="기준 색상:").pack(side="left")
-        self.lbl_watch_color = ttk.Label(rr2, textvariable=self.v_watch_px_color,
-                                         foreground="#aed581", font=("Consolas", 9))
-        self.lbl_watch_color.pack(side="left", padx=(6, 0))
+        ttk.Label(rr2, text="사망 임계값(%):").pack(side="left")
+        ttk.Spinbox(rr2, from_=0, to=30, increment=1,
+                    textvariable=self.v_watch_hp_min, width=4
+                    ).pack(side="left", padx=(6, 0))
+        ttk.Label(rr2, text="이하이면 사망 처리",
+                  foreground="#888888", font=("맑은 고딕", 8)
+                  ).pack(side="left", padx=(4, 0))
+        ttk.Label(rr2, text="  확인 횟수:").pack(side="left", padx=(12, 4))
+        ttk.Spinbox(rr2, from_=1, to=10, increment=1,
+                    textvariable=self.v_watch_hp_conf, width=3
+                    ).pack(side="left")
+        ttk.Label(rr2, text="회 연속",
+                  foreground="#888888", font=("맑은 고딕", 8)
+                  ).pack(side="left", padx=(4, 0))
 
         rr3 = ttk.Frame(rf)
         rr3.pack(fill="x")
-        ttk.Label(rr3, text="감도 (색 거리):").pack(side="left")
-        ttk.Spinbox(rr3, from_=1, to=200, increment=5,
-                    textvariable=self.v_watch_px_thr, width=5
+        ttk.Label(rr3, text="실행 후 대기:").pack(side="left")
+        ttk.Spinbox(rr3, from_=5, to=300, increment=5,
+                    textvariable=self.v_watch_hp_cool, width=5
                     ).pack(side="left", padx=(6, 0))
-        ttk.Label(rr3, text="  낮을수록 민감 (권장: 10~30, 최대 255)",
+        ttk.Label(rr3, text="초  (명령어 실행 후 재감시 전 대기)",
                   foreground="#888888", font=("맑은 고딕", 8)
                   ).pack(side="left", padx=(4, 0))
 
@@ -848,8 +864,8 @@ class App:
 
     # ─── Watch Toggle / Worker ────────────────────────────────
     def _toggle_watch_on(self):
-        if self.config.get("watch_px_x") is None or self.config.get("watch_px_color") is None:
-            messagebox.showwarning("경고", "감시 픽셀을 먼저 캡처하세요.")
+        if self.config.get("hp_x") is None:
+            messagebox.showwarning("경고", "탭1에서 HP 픽셀 위치를 먼저 설정하세요.")
             return
         if not all(self.config.get(f"watch_c{n}_x") is not None for n in (1, 2, 3)):
             messagebox.showwarning("경고", "1~3차 좌표를 모두 캡처하세요.")
@@ -878,47 +894,52 @@ class App:
         self.root.after(0, _do)
 
     def _watch_worker(self):
-        INTERVAL = 0.5
-        idle     = 0.0
+        INTERVAL  = 0.5
+        dead_cnt  = 0
 
         while not self.watch_stop_event.is_set():
-            time.sleep(INTERVAL)
+            self.watch_stop_event.wait(INTERVAL)
             if self.watch_stop_event.is_set():
                 break
 
-            px_x   = self.config.get("watch_px_x")
-            px_y   = self.config.get("watch_px_y")
-            ref    = self.config.get("watch_px_color")
-            if px_x is None or ref is None:
+            hp_pct = self._read_hp_pct()
+            if hp_pct is None:
+                self._watch_set_status("HP 설정 없음 - 탭1 HP 픽셀 먼저 설정하세요", "#e53935", 0)
                 continue
 
-            try:
-                curr = self._get_pixel(px_x, px_y)
-            except Exception as e:
-                self._log(f"픽셀 캡처 실패: {e}", "warning")
-                continue
+            min_pct  = max(0, self._si(self.v_watch_hp_min.get(),  5))
+            need_cnt = max(1, self._si(self.v_watch_hp_conf.get(), 3))
+            bar_pct  = min(100, max(0, hp_pct))
 
-            r, g, b = curr[0], curr[1], curr[2]
-            dist = ((r - ref[0])**2 + (g - ref[1])**2 + (b - ref[2])**2) ** 0.5
-            thr  = max(1, self._si(self.v_watch_px_thr.get(), 10))
-
-            if dist >= thr:
-                idle = 0.0
+            if hp_pct > min_pct:
+                dead_cnt = 0
+                bar = "█" * int(hp_pct / 10)
                 self._watch_set_status(
-                    f"색 변화 감지 (색 거리: {dist:.1f})  RGB({r},{g},{b}) - 타이머 초기화",
-                    "#4fc3f7", 0)
+                    f"HP {hp_pct:.1f}%  [{bar:<10}]  정상", "#81c784", bar_pct)
                 continue
 
-            idle += INTERVAL
-            delay = max(5, self._si(self.v_watch_delay.get(), 30))
-            pct   = min(100, idle / delay * 100)
-            rem   = max(0.0, delay - idle)
+            dead_cnt += 1
             self._watch_set_status(
-                f"색 유지 (거리: {dist:.1f}) | {rem:.0f}초 후 실행", "#ffb74d", pct)
+                f"HP {hp_pct:.1f}% ≤ {min_pct}%  사망 감지 [{dead_cnt}/{need_cnt}]",
+                "#e53935", min(100, dead_cnt / need_cnt * 100))
 
-            if idle >= delay:
-                idle = 0.0
-                self._watch_execute_sequence()
+            if dead_cnt < need_cnt:
+                continue
+
+            dead_cnt = 0
+            self._log(f"HP {hp_pct:.1f}% 사망 확인 - 수배 명령어 실행", "warning")
+            self._watch_set_status("수배 명령어 실행 중...", "#f57c00", 100)
+            threading.Thread(target=self._send_commands, daemon=True).start()
+
+            cooldown = max(5, self._si(self.v_watch_hp_cool.get(), 30))
+            for remaining in range(cooldown, 0, -1):
+                if self.watch_stop_event.is_set():
+                    return
+                self._watch_set_status(
+                    f"명령어 실행 완료 - 재감시까지 {remaining}초 대기", "#ffb74d", 0)
+                time.sleep(1)
+
+            self._watch_execute_sequence()
 
     def _watch_execute_sequence(self):
         def _click_n(xk, yk, label, count_key):
@@ -1531,6 +1552,38 @@ class App:
     def _si(v, d):
         try:    return int(float(v))
         except: return d
+
+    def _read_hp_pct(self):
+        cfg = self.config
+        x   = cfg.get("hp_x")
+        y   = cfg.get("hp_y")
+        if x is None or y is None:
+            return None
+        hp_color = cfg.get("hp_color", [200, 50, 50])
+        thr      = cfg.get("hp_threshold", 30)
+        x2       = cfg.get("hp_x2")
+        if x2 is not None:
+            try:
+                img  = ImageGrab.grab(bbox=(x, y - 2, x2, y + 3))
+                pix  = img.load()
+                w, h = img.size
+                hr, hg, hb = hp_color
+                match = sum(
+                    1 for row in range(h) for col in range(w)
+                    if ((pix[col, row][0]-hr)**2 +
+                        (pix[col, row][1]-hg)**2 +
+                        (pix[col, row][2]-hb)**2) ** 0.5 <= thr
+                )
+                return (match / (w * h)) * 100
+            except Exception:
+                return None
+        else:
+            try:
+                color = self._get_pixel(x, y)
+                dist  = self._color_dist(color, hp_color)
+                return 0.0 if dist > thr else 100.0
+            except Exception:
+                return None
 
     @staticmethod
     def _get_pixel(x, y):
