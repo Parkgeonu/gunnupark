@@ -15,7 +15,7 @@ import pystray
 from PIL import Image, ImageDraw, ImageGrab
 from updater import check_and_update, check_update_on_startup
 
-APP_VERSION  = "1.1.6"
+APP_VERSION  = "1.1.7"
 APP_EXE_NAME = "LineageHP"
 
 CONFIG_FILE = "hp_config.json"
@@ -67,6 +67,11 @@ DEFAULT_CONFIG = {
     "watch_hp_min_pct":   5,
     "watch_hp_confirm":   3,
     "watch_hp_cooldown":  30,
+    "watch_bar_x1": None, "watch_bar_y1": None,
+    "watch_bar_x2": None, "watch_bar_y2": None,
+    "watch_bar_color":    None,
+    "watch_bar_color_thr": 30,
+    "watch_bar_dead_px":  5,
     "watch_c1_x": None, "watch_c1_y": None,
     "watch_c2_x": None, "watch_c2_y": None,
     "watch_c3_x": None, "watch_c3_y": None,
@@ -196,6 +201,8 @@ class App:
         c["watch_hp_min_pct"]   = self._si(self.v_watch_hp_min.get(),  5)
         c["watch_hp_confirm"]   = self._si(self.v_watch_hp_conf.get(), 3)
         c["watch_hp_cooldown"]  = self._si(self.v_watch_hp_cool.get(), 30)
+        c["watch_bar_color_thr"] = self._si(self.v_watch_bar_cthr.get(), 30)
+        c["watch_bar_dead_px"]  = self._si(self.v_watch_bar_dead.get(), 5)
         c["watch_c1_count"]     = self._si(self.v_watch_c1_count.get(), 1)
         c["watch_c2_count"]     = self._si(self.v_watch_c2_count.get(), 1)
         c["watch_c3_count"]     = self._si(self.v_watch_c3_count.get(), 1)
@@ -247,6 +254,15 @@ class App:
         self.v_watch_hp_min   = tk.StringVar(value=str(cfg.get("watch_hp_min_pct",  5)))
         self.v_watch_hp_conf  = tk.StringVar(value=str(cfg.get("watch_hp_confirm",  3)))
         self.v_watch_hp_cool  = tk.StringVar(value=str(cfg.get("watch_hp_cooldown", 30)))
+        _bx1 = cfg.get("watch_bar_x1"); _by1 = cfg.get("watch_bar_y1")
+        _bx2 = cfg.get("watch_bar_x2"); _bc  = cfg.get("watch_bar_color")
+        self.v_watch_bar_area = tk.StringVar(
+            value=f"({_bx1},{_by1}) ~ ({_bx2},{_by1})" if _bx1 is not None else "미설정")
+        self.v_watch_bar_color = tk.StringVar(
+            value=f"RGB({_bc[0]},{_bc[1]},{_bc[2]})" if _bc else "미설정")
+        self.v_watch_bar_px   = tk.StringVar(value="0")
+        self.v_watch_bar_cthr = tk.StringVar(value=str(cfg.get("watch_bar_color_thr", 30)))
+        self.v_watch_bar_dead = tk.StringVar(value=str(cfg.get("watch_bar_dead_px",   5)))
         r = cfg.get("watch_region")
         self.v_watch_region = tk.StringVar(
             value=f"({r[0]},{r[1]}) {r[2]}×{r[3]}" if r else "미설정")
@@ -709,45 +725,52 @@ class App:
     # ── Tab 5: 클라이언트 감시 ───────────────────────────────
     def _build_tab_watch(self, parent):
         ttk.Label(parent,
-                  text="탭1 HP 설정 기준으로 HP를 실시간 감시  |  HP=0 감지 시 수배 명령어 자동 실행",
+                  text="HP 바 영역을 설정하면 HP 픽셀 수를 실시간 감시  |  픽셀 수 = 0 → 수배 명령어 자동 실행",
                   foreground="#888888", font=("맑은 고딕", 8)
                   ).pack(anchor="w", pady=(0, 4))
 
-        # ── HP 실시간 감시 설정 ──
-        rf = ttk.LabelFrame(parent, text=" HP 실시간 감시 설정 ", padding="8 6")
+        # ── HP 바 영역 감시 설정 ──
+        rf = ttk.LabelFrame(parent, text=" HP 바 영역 감시 ", padding="8 6")
         rf.pack(fill="x", pady=(0, 5))
 
-        rr1 = ttk.Frame(rf)
-        rr1.pack(fill="x", pady=(0, 4))
-        ttk.Label(rr1, text="HP 기준:").pack(side="left")
-        ttk.Label(rr1, text="탭1 HP 설정 자동 사용 (별도 설정 불필요)",
-                  foreground="#aed581", font=("맑은 고딕", 8)
+        rr1 = ttk.Frame(rf);  rr1.pack(fill="x", pady=(0, 4))
+        ttk.Label(rr1, text="HP 바 영역:").pack(side="left")
+        ttk.Label(rr1, textvariable=self.v_watch_bar_area,
+                  foreground="#4fc3f7", font=("Consolas", 9)
+                  ).pack(side="left", padx=(6, 10))
+        self.btn_watch_region = ttk.Button(rr1, text="HP 바 설정 (6초: 좌→우)",
+                                           command=self._start_watch_region_capture)
+        self.btn_watch_region.pack(side="left")
+
+        rr2 = ttk.Frame(rf);  rr2.pack(fill="x", pady=(0, 4))
+        ttk.Label(rr2, text="HP 색상:").pack(side="left")
+        self.lbl_watch_bar_color = ttk.Label(rr2, textvariable=self.v_watch_bar_color,
+                                             foreground="#ef9a9a", font=("Consolas", 9))
+        self.lbl_watch_bar_color.pack(side="left", padx=(6, 0))
+        ttk.Label(rr2, text="  감도:").pack(side="left", padx=(14, 4))
+        ttk.Spinbox(rr2, from_=5, to=100, increment=5,
+                    textvariable=self.v_watch_bar_cthr, width=4).pack(side="left")
+
+        rr3 = ttk.Frame(rf);  rr3.pack(fill="x", pady=(0, 4))
+        ttk.Label(rr3, text="현재 HP 픽셀 수:").pack(side="left")
+        ttk.Label(rr3, textvariable=self.v_watch_bar_px,
+                  foreground="#ffb74d", font=("Consolas", 11, "bold")
                   ).pack(side="left", padx=(6, 0))
-
-        rr2 = ttk.Frame(rf)
-        rr2.pack(fill="x", pady=(0, 4))
-        ttk.Label(rr2, text="사망 임계값(%):").pack(side="left")
-        ttk.Spinbox(rr2, from_=0, to=30, increment=1,
-                    textvariable=self.v_watch_hp_min, width=4
-                    ).pack(side="left", padx=(6, 0))
-        ttk.Label(rr2, text="이하이면 사망 처리",
-                  foreground="#888888", font=("맑은 고딕", 8)
-                  ).pack(side="left", padx=(4, 0))
-        ttk.Label(rr2, text="  확인 횟수:").pack(side="left", padx=(12, 4))
-        ttk.Spinbox(rr2, from_=1, to=10, increment=1,
-                    textvariable=self.v_watch_hp_conf, width=3
-                    ).pack(side="left")
-        ttk.Label(rr2, text="회 연속",
+        ttk.Label(rr3, text="  (감시 중 실시간 갱신)",
                   foreground="#888888", font=("맑은 고딕", 8)
                   ).pack(side="left", padx=(4, 0))
 
-        rr3 = ttk.Frame(rf)
-        rr3.pack(fill="x")
-        ttk.Label(rr3, text="실행 후 대기:").pack(side="left")
-        ttk.Spinbox(rr3, from_=5, to=300, increment=5,
-                    textvariable=self.v_watch_hp_cool, width=5
-                    ).pack(side="left", padx=(6, 0))
-        ttk.Label(rr3, text="초  (명령어 실행 후 재감시 전 대기)",
+        rr4 = ttk.Frame(rf);  rr4.pack(fill="x")
+        ttk.Label(rr4, text="사망 임계값(px):").pack(side="left")
+        ttk.Spinbox(rr4, from_=0, to=50, increment=1,
+                    textvariable=self.v_watch_bar_dead, width=4).pack(side="left", padx=(6, 0))
+        ttk.Label(rr4, text="이하 =사망  확인:").pack(side="left", padx=(10, 4))
+        ttk.Spinbox(rr4, from_=1, to=10, increment=1,
+                    textvariable=self.v_watch_hp_conf, width=3).pack(side="left")
+        ttk.Label(rr4, text="회  대기:").pack(side="left", padx=(8, 4))
+        ttk.Spinbox(rr4, from_=5, to=300, increment=5,
+                    textvariable=self.v_watch_hp_cool, width=5).pack(side="left")
+        ttk.Label(rr4, text="초",
                   foreground="#888888", font=("맑은 고딕", 8)
                   ).pack(side="left", padx=(4, 0))
 
@@ -808,34 +831,79 @@ class App:
                                          command=self._toggle_watch_off)
         self.btn_watch_stop.pack(side="left")
 
-    # ─── Watch Pixel Capture ──────────────────────────────────
+    # ─── Watch Bar Capture ────────────────────────────────────
     def _start_watch_region_capture(self):
         self.btn_watch_region.configure(state="disabled")
-        self._log("감시 픽셀 설정 - 3초 후 마우스 위치의 픽셀을 캡처합니다...", "warning")
+        self._log("HP 바 설정 - 3초 후 HP 바 [좌측 끝]에 마우스를 올려주세요", "warning")
         threading.Thread(target=self._watch_region_worker, daemon=True).start()
 
     def _watch_region_worker(self):
         for i in range(3, 0, -1):
-            x, y = pyautogui.position()
-            self._log(f"  {i}초... 현재 위치 ({x},{y})", "info")
+            px, py = pyautogui.position()
+            self._log(f"  좌측 {i}초... ({px},{py})", "info")
             time.sleep(1)
-        px, py = pyautogui.position()
-        color  = self._get_pixel(px, py)
-        self.config["watch_px_x"]     = px
-        self.config["watch_px_y"]     = py
-        self.config["watch_px_color"] = list(color)
-        hex_col = "#{:02X}{:02X}{:02X}".format(*color)
+        x1, y1 = pyautogui.position()
+        self._log(f"좌측 확정 ({x1},{y1})  →  3초 후 HP 바 [우측 끝]에 마우스를 올려주세요", "warning")
+        for i in range(3, 0, -1):
+            px, py = pyautogui.position()
+            self._log(f"  우측 {i}초... ({px},{py})", "info")
+            time.sleep(1)
+        x2, y2 = pyautogui.position()
+        if abs(x2 - x1) < 5:
+            self._log("영역이 너무 좁습니다. 다시 설정하세요.", "error")
+            self.root.after(0, lambda: self.btn_watch_region.configure(state="normal"))
+            return
+        # 중앙 픽셀에서 HP 색상 자동 감지
+        cx = (x1 + x2) // 2
+        cy = (y1 + y2) // 2
+        try:
+            color = list(self._get_pixel(cx, cy))
+        except Exception:
+            color = [200, 50, 50]
+        self.config["watch_bar_x1"]    = min(x1, x2)
+        self.config["watch_bar_y1"]    = cy
+        self.config["watch_bar_x2"]    = max(x1, x2)
+        self.config["watch_bar_y2"]    = cy
+        self.config["watch_bar_color"] = color
+        # 현재 픽셀 수 바로 계산
+        cur_px = self._count_watch_hp_px()
+        hex_c  = "#{:02X}{:02X}{:02X}".format(*color)
         def _done():
-            self.v_watch_px_pos.set(f"({px}, {py})")
-            self.v_watch_px_color.set(f"RGB({color[0]}, {color[1]}, {color[2]})  {hex_col}")
+            w = abs(x2 - x1)
+            self.v_watch_bar_area.set(f"({min(x1,x2)},{cy}) ~ ({max(x1,x2)},{cy})  너비:{w}px")
+            self.v_watch_bar_color.set(f"RGB({color[0]},{color[1]},{color[2]})  {hex_c}")
+            self.v_watch_bar_px.set(str(cur_px if cur_px is not None else 0))
             try:
-                self.lbl_watch_color.configure(foreground=hex_col)
+                self.lbl_watch_bar_color.configure(foreground=hex_c)
             except Exception:
                 pass
             self._save_config(show_msg=False)
-            self._log(f"감시 픽셀 설정 완료: ({px},{py})  {hex_col}", "success")
+            self._log(f"HP 바 설정 완료  영역:너비{w}px  색:{hex_c}  현재:{cur_px}px", "success")
             self.btn_watch_region.configure(state="normal")
         self.root.after(0, _done)
+
+    def _count_watch_hp_px(self):
+        cfg   = self.config
+        x1    = cfg.get("watch_bar_x1")
+        y1    = cfg.get("watch_bar_y1")
+        x2    = cfg.get("watch_bar_x2")
+        color = cfg.get("watch_bar_color")
+        if x1 is None or color is None:
+            return None
+        thr = max(5, self._si(self.v_watch_bar_cthr.get(), 30))
+        try:
+            img  = ImageGrab.grab(bbox=(x1, y1 - 3, x2, y1 + 4))
+            pix  = img.load()
+            w, h = img.size
+            hr, hg, hb = color
+            return sum(
+                1 for row in range(h) for col in range(w)
+                if ((pix[col, row][0]-hr)**2 +
+                    (pix[col, row][1]-hg)**2 +
+                    (pix[col, row][2]-hb)**2) ** 0.5 <= thr
+            )
+        except Exception:
+            return None
 
     # ─── Watch Capture ────────────────────────────────────────
     def _start_watch_capture(self, num):
@@ -864,8 +932,8 @@ class App:
 
     # ─── Watch Toggle / Worker ────────────────────────────────
     def _toggle_watch_on(self):
-        if self.config.get("hp_x") is None:
-            messagebox.showwarning("경고", "탭1에서 HP 픽셀 위치를 먼저 설정하세요.")
+        if self.config.get("watch_bar_x1") is None:
+            messagebox.showwarning("경고", "HP 바 영역을 먼저 설정하세요.\n[HP 바 설정 (6초: 좌→우)] 버튼을 클릭하세요.")
             return
         if not all(self.config.get(f"watch_c{n}_x") is not None for n in (1, 2, 3)):
             messagebox.showwarning("경고", "1~3차 좌표를 모두 캡처하세요.")
@@ -894,40 +962,41 @@ class App:
         self.root.after(0, _do)
 
     def _watch_worker(self):
-        INTERVAL  = 0.5
-        dead_cnt  = 0
+        INTERVAL = 0.5
+        dead_cnt = 0
 
         while not self.watch_stop_event.is_set():
             self.watch_stop_event.wait(INTERVAL)
             if self.watch_stop_event.is_set():
                 break
 
-            hp_pct = self._read_hp_pct()
-            if hp_pct is None:
-                self._watch_set_status("HP 설정 없음 - 탭1 HP 픽셀 먼저 설정하세요", "#e53935", 0)
+            cur_px = self._count_watch_hp_px()
+            if cur_px is None:
+                self._watch_set_status("HP 바 설정 없음  →  [HP 바 설정] 버튼을 먼저 클릭하세요", "#e53935", 0)
                 continue
 
-            min_pct  = max(0, self._si(self.v_watch_hp_min.get(),  5))
-            need_cnt = max(1, self._si(self.v_watch_hp_conf.get(), 3))
-            bar_pct  = min(100, max(0, hp_pct))
+            # UI 픽셀 수 실시간 갱신
+            self.root.after(0, lambda v=cur_px: self.v_watch_bar_px.set(str(v)))
 
-            if hp_pct > min_pct:
+            dead_px  = max(0, self._si(self.v_watch_bar_dead.get(), 5))
+            need_cnt = max(1, self._si(self.v_watch_hp_conf.get(), 3))
+
+            if cur_px > dead_px:
                 dead_cnt = 0
-                bar = "█" * int(hp_pct / 10)
-                self._watch_set_status(
-                    f"HP {hp_pct:.1f}%  [{bar:<10}]  정상", "#81c784", bar_pct)
+                self._watch_set_status(f"HP 픽셀: {cur_px}px  정상", "#81c784",
+                                       min(100, cur_px))
                 continue
 
             dead_cnt += 1
             self._watch_set_status(
-                f"HP {hp_pct:.1f}% ≤ {min_pct}%  사망 감지 [{dead_cnt}/{need_cnt}]",
+                f"HP 픽셀: {cur_px}px ≤ {dead_px}px  사망 감지 [{dead_cnt}/{need_cnt}]",
                 "#e53935", min(100, dead_cnt / need_cnt * 100))
 
             if dead_cnt < need_cnt:
                 continue
 
             dead_cnt = 0
-            self._log(f"HP {hp_pct:.1f}% 사망 확인 - 수배 명령어 실행", "warning")
+            self._log(f"HP 픽셀 {cur_px}px 사망 확정  →  수배 명령어 실행", "warning")
             self._watch_set_status("수배 명령어 실행 중...", "#f57c00", 100)
             threading.Thread(target=self._send_commands, daemon=True).start()
 
@@ -936,7 +1005,7 @@ class App:
                 if self.watch_stop_event.is_set():
                     return
                 self._watch_set_status(
-                    f"명령어 실행 완료 - 재감시까지 {remaining}초 대기", "#ffb74d", 0)
+                    f"명령어 실행 완료  →  재감시까지 {remaining}초 대기", "#ffb74d", 0)
                 time.sleep(1)
 
             self._watch_execute_sequence()
