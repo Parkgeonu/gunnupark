@@ -15,7 +15,7 @@ import pystray
 from PIL import Image, ImageDraw, ImageGrab
 from updater import check_and_update, check_update_on_startup
 
-APP_VERSION  = "1.1.8"
+APP_VERSION  = "1.1.9"
 APP_EXE_NAME = "LineageHP"
 
 CONFIG_FILE = "hp_config.json"
@@ -124,6 +124,7 @@ class App:
         self.tray_icon       = None
         self._settings_win   = None
         self._log_buffer     = []
+        self.hp_color_box    = None   # 수배 탭 숨김 시 미초기화 방지
         self._log_popup      = None
         self._log_popup_text = None
 
@@ -287,6 +288,13 @@ class App:
         self.v_alt_key_a       = tk.StringVar(value=cfg.get("alt_key_a",          "F6"))
         self.v_alt_enabled     = tk.BooleanVar(value=cfg.get("alt_key_enabled",   False))
         self.v_alt_interval_ms = tk.StringVar(value=str(cfg.get("alt_key_interval_ms", 1000)))
+        # HP 표시 변수 (수배 탭 숨김으로 인한 미초기화 방지)
+        _hpx = cfg.get("hp_x"); _hpy = cfg.get("hp_y")
+        _hpc = cfg.get("hp_color")
+        self.v_hp_pos   = tk.StringVar(
+            value=f"({_hpx}, {_hpy})" if _hpx is not None else "미설정")
+        self.v_hp_color = tk.StringVar(
+            value=f"RGB{tuple(_hpc)}" if _hpc else "미설정")
 
     # ─── UI Build ────────────────────────────────────────────
     def _build_ui(self):
@@ -1573,10 +1581,12 @@ class App:
         self.v_hp_pos.set(f"({x}, {y})" if x is not None else "미설정")
         if color:
             c = tuple(color)
-            self.hp_color_box.configure(bg="#{:02x}{:02x}{:02x}".format(*c))
+            if self.hp_color_box:
+                self.hp_color_box.configure(bg="#{:02x}{:02x}{:02x}".format(*c))
             self.v_hp_color.set(f"RGB{c}")
         else:
-            self.hp_color_box.configure(bg="#555")
+            if self.hp_color_box:
+                self.hp_color_box.configure(bg="#555")
             self.v_hp_color.set("미설정")
 
     def _log(self, msg, level="info"):
