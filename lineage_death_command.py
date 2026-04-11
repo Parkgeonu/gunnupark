@@ -15,7 +15,7 @@ import pystray
 from PIL import Image, ImageDraw, ImageGrab
 from updater import check_and_update, check_update_on_startup
 
-APP_VERSION  = "1.2.0"
+APP_VERSION  = "1.3.0"
 APP_EXE_NAME = "LineageHP"
 
 CONFIG_FILE = "hp_config.json"
@@ -83,6 +83,19 @@ DEFAULT_CONFIG = {
     "alt_key_b":       "F7",
     "alt_key_enabled": False,
     "alt_key_interval_ms": 1000,
+    # RGB 트리거
+    "rgb_trig_x": None, "rgb_trig_y": None,
+    "rgb_trig_mode": "change",
+    "rgb_trig_color": None,
+    "rgb_trig_threshold": 30,
+    "rgb_trig_interval_ms": 500,
+    "rgb_trig_cooldown": 5,
+    "rgb_actions": [
+        {"enabled": False, "type": "none",
+         "x": None, "y": None, "click_type": "left",
+         "key": "", "delay_before": 0, "delay_after": 200}
+        for _ in range(6)
+    ],
 }
 
 
@@ -115,6 +128,11 @@ class App:
         self.lbl_watch_status = None
         self.btn_watch_start  = None
         self.btn_watch_stop   = None
+        self.rgb_stop_event   = threading.Event()
+        self.rgb_running      = False
+        self.btn_rgb_start    = None
+        self.btn_rgb_stop     = None
+        self.rgb_color_box    = None
         self.alt_key_state    = 0
         self.alt_repeat_stop  = threading.Event()
         self.alt_repeat_on    = False
@@ -174,7 +192,8 @@ class App:
 
     def _sync_from_ui(self):
         c = self.config
-        c["commands"]            = self.cmd_text.get("1.0", "end-1c").split("\n")
+        if hasattr(self, "cmd_text"):
+            c["commands"] = self.cmd_text.get("1.0", "end-1c").split("\n")
         c["death_delay"]         = self._sf(self.v_delay.get(), 10.0)
         c["check_interval"]      = self._sf(self.v_interval.get(), 0.5)
         c["cooldown_sec"]        = self._sf(self.v_cooldown.get(), 20.0)
@@ -213,6 +232,16 @@ class App:
         c["alt_key_a"]            = self.v_alt_key_a.get()
         c["alt_key_enabled"]      = bool(self.v_alt_enabled.get())
         c["alt_key_interval_ms"]  = self._si(self.v_alt_interval_ms.get(), 1000)
+        c["rgb_trig_mode"]        = self.v_rgb_trig_mode.get()
+        c["rgb_trig_threshold"]   = self._si(self.v_rgb_thr.get(), 30)
+        c["rgb_trig_interval_ms"] = self._si(self.v_rgb_interval.get(), 500)
+        c["rgb_trig_cooldown"]    = self._si(self.v_rgb_cooldown.get(), 5)
+        # rgb_actions는 팝업 저장 시 직접 갱신됨 (enabled 상태만 동기화)
+        acts = c.get("rgb_actions", [{}]*6)
+        for i in range(6):
+            if i < len(acts):
+                acts[i]["enabled"] = bool(self.rgb_action_enabled[i].get())
+        c["rgb_actions"] = acts
 
     # ─── Variable init ───────────────────────────────────────
     def _init_vars(self):
@@ -297,6 +326,19 @@ class App:
             value=f"({_hpx}, {_hpy})" if _hpx is not None else "미설정")
         self.v_hp_color = tk.StringVar(
             value=f"RGB{tuple(_hpc)}" if _hpc else "미설정")
+        # RGB 트리거 변수
+        _acts = cfg.get("rgb_actions", [{}]*6)
+        self.v_rgb_mon_pos   = tk.StringVar(value="미설정")
+        self.v_rgb_mon_color = tk.StringVar(value="---")
+        self.v_rgb_trig_mode = tk.StringVar(value=cfg.get("rgb_trig_mode", "change"))
+        self.v_rgb_thr       = tk.StringVar(value=str(cfg.get("rgb_trig_threshold", 30)))
+        self.v_rgb_interval  = tk.StringVar(value=str(cfg.get("rgb_trig_interval_ms", 500)))
+        self.v_rgb_cooldown  = tk.StringVar(value=str(cfg.get("rgb_trig_cooldown", 5)))
+        self.rgb_action_enabled   = [
+            tk.BooleanVar(value=_acts[i].get("enabled", False) if i < len(_acts) else False)
+            for i in range(6)
+        ]
+        self.rgb_action_summaries = [tk.StringVar(value="없음") for _ in range(6)]
 
     # ─── UI Build ────────────────────────────────────────────
     def _build_ui(self):
@@ -350,6 +392,11 @@ class App:
         # t5 = ttk.Frame(nb, padding="8 6")
         # nb.add(t5, text="   클라이언트 감시   ")
         # self._build_tab_watch(t5)
+
+        # Tab 6 : RGB 트리거 감시
+        t6 = ttk.Frame(nb, padding="8 6")
+        nb.add(t6, text="   RGB 트리거   ")
+        self._build_tab_rgb_trigger(t6)
 
         # ── 공통 버튼 ──
         bf = ttk.Frame(pad)
@@ -915,6 +962,98 @@ class App:
         except Exception:
             return None
 
+    # ─── Tab 6: RGB 트리거 감시 ───────────────────────────────
+    def _build_tab_rgb_trigger(self, parent):
+        ttk.Label(parent,
+                  text="지정 좌표의 RGB를 실시간 감시하여 조건 충족 시 액션을 순서대로 실행합니다.",
+                  foreground="#888888", font=("맑은 고딕", 8)
+                  ).pack(anchor="w", pady=(0, 6))
+
+        # ── 감시 설정 ──
+        sf = ttk.LabelFrame(parent, text=" 감시 설정 ", padding="8 6")
+        sf.pack(fill="x", pady=(0, 6))
+
+        # 좌표 행
+        r1 = ttk.Frame(sf); r1.pack(fill="x", pady=(0, 4))
+        ttk.Label(r1, text="감시 좌표:").pack(side="left")
+        ttk.Label(r1, textvariable=self.v_rgb_mon_pos,
+                  foreground="#81c784").pack(side="left", padx=(4, 12))
+        ttk.Button(r1, text="3초 캡처",
+                   command=self._rgb_capture_pos).pack(side="left")
+
+        # 색 표시 행
+        r2 = ttk.Frame(sf); r2.pack(fill="x", pady=(0, 4))
+        ttk.Label(r2, text="현재 색:").pack(side="left")
+        self.rgb_color_box = tk.Canvas(r2, width=18, height=18, bd=1, relief="solid",
+                                       bg="#222222")
+        self.rgb_color_box.pack(side="left", padx=(4, 4))
+        ttk.Label(r2, textvariable=self.v_rgb_mon_color,
+                  foreground="#ffb74d").pack(side="left", padx=(0, 12))
+
+        # 모드 행
+        r3 = ttk.Frame(sf); r3.pack(fill="x", pady=(0, 4))
+        ttk.Label(r3, text="트리거 모드:").pack(side="left")
+        ttk.Radiobutton(r3, text="색 변화 감지", variable=self.v_rgb_trig_mode,
+                        value="change").pack(side="left", padx=(6, 0))
+        ttk.Radiobutton(r3, text="특정 색 일치", variable=self.v_rgb_trig_mode,
+                        value="match").pack(side="left", padx=(6, 0))
+        self._btn_rgb_save_color = ttk.Button(r3, text="현재 색 저장 (일치 기준)",
+                                               command=self._rgb_save_target_color)
+        self._btn_rgb_save_color.pack(side="left", padx=(8, 0))
+
+        # 파라미터 행
+        r4 = ttk.Frame(sf); r4.pack(fill="x")
+        ttk.Label(r4, text="임계값:").pack(side="left")
+        ttk.Spinbox(r4, from_=0, to=255, increment=1,
+                    textvariable=self.v_rgb_thr, width=5).pack(side="left", padx=(4, 12))
+        ttk.Label(r4, text="체크간격(ms):").pack(side="left")
+        ttk.Spinbox(r4, from_=100, to=10000, increment=100,
+                    textvariable=self.v_rgb_interval, width=6).pack(side="left", padx=(4, 12))
+        ttk.Label(r4, text="쿨다운(초):").pack(side="left")
+        ttk.Spinbox(r4, from_=0, to=300, increment=1,
+                    textvariable=self.v_rgb_cooldown, width=5).pack(side="left", padx=(4, 0))
+
+        # ── 액션 목록 ──
+        af = ttk.LabelFrame(parent, text=" 실행 액션 (트리거 시 순서대로 실행) ", padding="8 6")
+        af.pack(fill="x", pady=(0, 6))
+
+        headers = ["#", "활성", "액션 요약", ""]
+        col_w   = [2, 3, 35, 8]
+        for c, (h, w) in enumerate(zip(headers, col_w)):
+            ttk.Label(af, text=h, foreground="#aaaaaa",
+                      font=("맑은 고딕", 8, "bold"), width=w
+                      ).grid(row=0, column=c, padx=(0, 4), pady=(0, 4), sticky="w")
+
+        for i in range(6):
+            idx = i
+            ttk.Label(af, text=f"#{i+1}").grid(row=i+1, column=0, padx=(0, 4), pady=2, sticky="w")
+            ttk.Checkbutton(af, variable=self.rgb_action_enabled[i],
+                            command=lambda n=idx: self._rgb_update_summary(n)
+                            ).grid(row=i+1, column=1, pady=2)
+            ttk.Label(af, textvariable=self.rgb_action_summaries[i],
+                      foreground="#888888", width=38, anchor="w"
+                      ).grid(row=i+1, column=2, pady=2, sticky="w")
+            ttk.Button(af, text="편집", width=6,
+                       command=lambda n=idx: self._open_rgb_action_popup(n)
+                       ).grid(row=i+1, column=3, pady=2)
+
+        # 요약 초기화
+        for i in range(6):
+            self._rgb_update_summary(i)
+
+        # ── 제어 버튼 ──
+        bf = ttk.Frame(parent); bf.pack(fill="x", pady=(4, 0))
+        self.btn_rgb_start = ttk.Button(bf, text="▶ 감시 시작",
+                                        command=self._toggle_rgb_on,
+                                        style="Accent.TButton")
+        self.btn_rgb_start.pack(side="left", padx=(0, 4))
+        self.btn_rgb_stop = ttk.Button(bf, text="■ 감시 중지",
+                                       command=self._toggle_rgb_off,
+                                       style="Danger.TButton", state="disabled")
+        self.btn_rgb_stop.pack(side="left")
+        self.lbl_rgb_status = ttk.Label(bf, text="대기 중", foreground="#888888")
+        self.lbl_rgb_status.pack(side="left", padx=(12, 0))
+
     # ─── Watch Capture ────────────────────────────────────────
     def _start_watch_capture(self, num):
         if not self.watch_btn_caps or num - 1 >= len(self.watch_btn_caps):
@@ -976,6 +1115,328 @@ class App:
             if pct is not None and self.watch_progress and self.watch_progress.winfo_exists():
                 self.watch_progress.configure(value=pct)
         self.root.after(0, _do)
+
+    # ─── RGB 트리거 메서드들 ───────────────────────────────────
+    def _rgb_update_summary(self, idx):
+        acts = self.config.get("rgb_actions", [{}]*6)
+        act  = acts[idx] if idx < len(acts) else {}
+        atype = act.get("type", "none")
+        enabled = self.rgb_action_enabled[idx].get()
+        type_map = {
+            "none": "없음", "move": "마우스 이동",
+            "click": "마우스 클릭", "key": "키보드 입력", "delay": "지연"
+        }
+        label = type_map.get(atype, "없음")
+        if atype == "move":
+            label += f"  →  ({act.get('x','?')}, {act.get('y','?')})"
+        elif atype == "click":
+            ct = {"left":"좌클릭","right":"우클릭","double":"더블클릭"}.get(act.get("click_type","left"),"좌클릭")
+            label += f"  →  {ct}  ({act.get('x','?')}, {act.get('y','?')})"
+        elif atype == "key":
+            label += f"  →  [{act.get('key','')}]"
+        elif atype == "delay":
+            label += f"  →  {act.get('delay_after',0)} ms"
+        prefix = "[ON] " if enabled else "[OFF] "
+        self.rgb_action_summaries[idx].set(prefix + label)
+
+    def _rgb_save_target_color(self):
+        x = self.config.get("rgb_trig_x")
+        y = self.config.get("rgb_trig_y")
+        if x is None:
+            messagebox.showwarning("경고", "먼저 감시 좌표를 캡처하세요.")
+            return
+        try:
+            r, g, b = pyautogui.pixel(x, y)
+            self.config["rgb_trig_color"] = [r, g, b]
+            self._save_config(show_msg=False)
+            self._log(f"RGB 일치 기준 색 저장: RGB({r},{g},{b})", "success")
+        except Exception as e:
+            self._log(f"색 저장 실패: {e}", "error")
+
+    def _rgb_capture_pos(self):
+        self._log("RGB 감시 좌표 캡처 — 3초 후 마우스 위치 저장", "warning")
+        def _worker():
+            for i in range(3, 0, -1):
+                x, y = pyautogui.position()
+                self._log(f"  {i}초... ({x},{y})", "info")
+                time.sleep(1)
+            x, y = pyautogui.position()
+            self.config["rgb_trig_x"] = x
+            self.config["rgb_trig_y"] = y
+            self._save_config(show_msg=False)
+            def _ui():
+                self.v_rgb_mon_pos.set(f"({x}, {y})")
+                self._log(f"RGB 감시 좌표 설정: ({x},{y})", "success")
+            self.root.after(0, _ui)
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _open_rgb_action_popup(self, idx):
+        acts = self.config.get("rgb_actions", [{}]*6)
+        while len(acts) < 6:
+            acts.append({"enabled": False, "type": "none",
+                         "x": None, "y": None, "click_type": "left",
+                         "key": "", "delay_before": 0, "delay_after": 200})
+        act = acts[idx]
+
+        win = tk.Toplevel(self.root)
+        win.title(f"액션 #{idx+1} 편집")
+        win.geometry("420x380")
+        win.resizable(False, False)
+        win.transient(self.root)
+        win.grab_set()
+
+        pad = ttk.Frame(win, padding="14 12"); pad.pack(fill="both", expand=True)
+
+        TYPE_OPTS = ["없음", "마우스 이동", "마우스 클릭", "키보드 입력", "지연"]
+        TYPE_KEY  = ["none", "move", "click", "key", "delay"]
+        cur_type  = act.get("type", "none")
+        try:
+            cur_label = TYPE_OPTS[TYPE_KEY.index(cur_type)]
+        except ValueError:
+            cur_label = "없음"
+
+        v_type  = tk.StringVar(value=cur_label)
+        v_x     = tk.StringVar(value=str(act.get("x", 0) or 0))
+        v_y     = tk.StringVar(value=str(act.get("y", 0) or 0))
+        v_click = tk.StringVar(value=act.get("click_type", "left"))
+        v_key   = tk.StringVar(value=act.get("key", ""))
+        v_dbef  = tk.StringVar(value=str(act.get("delay_before", 0)))
+        v_daft  = tk.StringVar(value=str(act.get("delay_after", 200)))
+
+        # 액션 타입
+        r0 = ttk.Frame(pad); r0.pack(fill="x", pady=(0, 8))
+        ttk.Label(r0, text="액션 타입:", width=14, anchor="e").pack(side="left")
+        cb_type = ttk.Combobox(r0, textvariable=v_type,
+                               values=TYPE_OPTS, state="readonly", width=14)
+        cb_type.pack(side="left", padx=(6, 0))
+
+        # 좌표 행
+        r1 = ttk.Frame(pad); r1.pack(fill="x", pady=(0, 6))
+        ttk.Label(r1, text="X:", width=14, anchor="e").pack(side="left")
+        sb_x = ttk.Spinbox(r1, from_=0, to=9999, textvariable=v_x, width=6)
+        sb_x.pack(side="left", padx=(6, 4))
+        ttk.Label(r1, text="Y:").pack(side="left")
+        sb_y = ttk.Spinbox(r1, from_=0, to=9999, textvariable=v_y, width=6)
+        sb_y.pack(side="left", padx=(4, 8))
+
+        cap_lbl = ttk.Label(r1, text="대기 중", foreground="#888888",
+                            font=("맑은 고딕", 8))
+        cap_lbl.pack(side="left")
+
+        def _capture_xy():
+            cap_lbl.configure(text="3초 후 캡처...", foreground="#ffb74d")
+            def _w():
+                for i in range(3, 0, -1):
+                    cx, cy = pyautogui.position()
+                    self.root.after(0, lambda i=i, cx=cx, cy=cy:
+                        cap_lbl.configure(text=f"{i}초.. ({cx},{cy})"))
+                    time.sleep(1)
+                fx, fy = pyautogui.position()
+                self.root.after(0, lambda: (
+                    v_x.set(str(fx)), v_y.set(str(fy)),
+                    cap_lbl.configure(text=f"완료 ({fx},{fy})", foreground="#81c784")
+                ))
+            threading.Thread(target=_w, daemon=True).start()
+
+        ttk.Button(r1, text="3초 캡처", command=_capture_xy).pack(side="left", padx=(4, 0))
+
+        # 클릭 타입
+        r2 = ttk.Frame(pad); r2.pack(fill="x", pady=(0, 6))
+        ttk.Label(r2, text="클릭 타입:", width=14, anchor="e").pack(side="left")
+        for ct_val, ct_txt in [("left","좌클릭"),("right","우클릭"),("double","더블클릭")]:
+            rb = ttk.Radiobutton(r2, text=ct_txt, variable=v_click, value=ct_val)
+            rb.pack(side="left", padx=(6, 0))
+
+        # 키 이름
+        r3 = ttk.Frame(pad); r3.pack(fill="x", pady=(0, 6))
+        ttk.Label(r3, text="키 이름:", width=14, anchor="e").pack(side="left")
+        ent_key = ttk.Entry(r3, textvariable=v_key, width=16)
+        ent_key.pack(side="left", padx=(6, 0))
+        ttk.Label(r3, text="  예) enter, f1, a, space",
+                  foreground="#888888", font=("맑은 고딕", 8)).pack(side="left", padx=(6, 0))
+
+        # 지연 시간
+        r4 = ttk.Frame(pad); r4.pack(fill="x", pady=(0, 6))
+        ttk.Label(r4, text="실행 전 지연:", width=14, anchor="e").pack(side="left")
+        sb_dbef = ttk.Spinbox(r4, from_=0, to=60000, increment=100,
+                              textvariable=v_dbef, width=6)
+        sb_dbef.pack(side="left", padx=(6, 4))
+        ttk.Label(r4, text="ms").pack(side="left")
+
+        r5 = ttk.Frame(pad); r5.pack(fill="x", pady=(0, 12))
+        ttk.Label(r5, text="실행 후 지연:", width=14, anchor="e").pack(side="left")
+        sb_daft = ttk.Spinbox(r5, from_=0, to=60000, increment=100,
+                              textvariable=v_daft, width=6)
+        sb_daft.pack(side="left", padx=(6, 4))
+        ttk.Label(r5, text="ms").pack(side="left")
+
+        # 필드 활성/비활성 제어
+        coord_widgets  = [sb_x, sb_y]
+        click_widgets  = list(r2.winfo_children())[1:]  # Radiobuttons
+        key_widgets    = [ent_key]
+
+        def _on_type_change(*_):
+            sel = v_type.get()
+            st_coord  = "normal" if sel in ("마우스 이동", "마우스 클릭") else "disabled"
+            st_click  = "normal" if sel == "마우스 클릭" else "disabled"
+            st_key    = "normal" if sel == "키보드 입력"  else "disabled"
+            for w in coord_widgets:  w.configure(state=st_coord)
+            for w in r2.winfo_children()[1:]:
+                try: w.configure(state=st_click)
+                except Exception: pass
+            ent_key.configure(state=st_key)
+
+        v_type.trace_add("write", _on_type_change)
+        _on_type_change()
+
+        # 확인/취소
+        rb = ttk.Frame(pad); rb.pack(fill="x")
+        def _ok():
+            sel = v_type.get()
+            try:
+                t_key = TYPE_KEY[TYPE_OPTS.index(sel)]
+            except ValueError:
+                t_key = "none"
+            new_act = {
+                "enabled":     self.rgb_action_enabled[idx].get(),
+                "type":        t_key,
+                "x":           int(v_x.get()) if v_x.get().isdigit() else None,
+                "y":           int(v_y.get()) if v_y.get().isdigit() else None,
+                "click_type":  v_click.get(),
+                "key":         v_key.get().strip(),
+                "delay_before": int(v_dbef.get()) if v_dbef.get().isdigit() else 0,
+                "delay_after":  int(v_daft.get()) if v_daft.get().isdigit() else 200,
+            }
+            acts_cfg = self.config.get("rgb_actions", [{}]*6)
+            while len(acts_cfg) < 6:
+                acts_cfg.append({})
+            acts_cfg[idx] = new_act
+            self.config["rgb_actions"] = acts_cfg
+            self._save_config(show_msg=False)
+            self._rgb_update_summary(idx)
+            self._log(f"액션 #{idx+1} 저장: {t_key}", "success")
+            win.destroy()
+
+        ttk.Button(rb, text="확인", style="Accent.TButton", command=_ok,
+                   width=8).pack(side="left", padx=(0, 6))
+        ttk.Button(rb, text="취소", command=win.destroy, width=8).pack(side="left")
+
+    def _toggle_rgb_on(self):
+        if self.config.get("rgb_trig_x") is None:
+            messagebox.showwarning("경고", "먼저 감시 좌표를 캡처하세요.")
+            return
+        self.rgb_stop_event.clear()
+        self.rgb_running = True
+        if self.btn_rgb_start: self.btn_rgb_start.configure(state="disabled")
+        if self.btn_rgb_stop:  self.btn_rgb_stop.configure(state="normal")
+        self.lbl_rgb_status.configure(text="감시 중...", foreground="#81c784")
+        self._log("RGB 트리거 감시 시작", "success")
+        threading.Thread(target=self._rgb_monitor_worker, daemon=True).start()
+
+    def _toggle_rgb_off(self):
+        self.rgb_stop_event.set()
+        self.rgb_running = False
+        if self.btn_rgb_start: self.btn_rgb_start.configure(state="normal")
+        if self.btn_rgb_stop:  self.btn_rgb_stop.configure(state="disabled")
+        self.lbl_rgb_status.configure(text="중지됨", foreground="#888888")
+        self._log("RGB 트리거 감시 중지", "warning")
+
+    def _rgb_monitor_worker(self):
+        prev_color  = None
+        last_trig   = 0.0
+        while not self.rgb_stop_event.is_set():
+            try:
+                x = self.config.get("rgb_trig_x")
+                y = self.config.get("rgb_trig_y")
+                if x is None or y is None:
+                    self.rgb_stop_event.wait(1)
+                    continue
+
+                r, g, b   = pyautogui.pixel(x, y)
+                cur       = (r, g, b)
+                hex_color = "#{:02x}{:02x}{:02x}".format(r, g, b)
+
+                def _update_ui(hc=hex_color, cr=cur):
+                    self.v_rgb_mon_color.set(f"RGB{cr}")
+                    if self.rgb_color_box:
+                        try: self.rgb_color_box.configure(bg=hc)
+                        except Exception: pass
+                self.root.after(0, _update_ui)
+
+                thr      = int(self.v_rgb_thr.get() or 30)
+                mode     = self.v_rgb_trig_mode.get()
+                cooldown = float(self.v_rgb_cooldown.get() or 5)
+                triggered = False
+
+                if mode == "change" and prev_color is not None:
+                    dist = sum(abs(a - b2) for a, b2 in zip(cur, prev_color))
+                    triggered = dist > thr
+
+                elif mode == "match":
+                    target = self.config.get("rgb_trig_color")
+                    if target:
+                        dist = sum(abs(a - b2) for a, b2 in zip(cur, target))
+                        triggered = dist <= thr
+
+                prev_color = cur
+
+                now = time.time()
+                if triggered and (now - last_trig) > cooldown:
+                    last_trig = now
+                    self._log(f"RGB 트리거 발생! 색={cur}", "warning")
+                    threading.Thread(target=self._execute_rgb_actions,
+                                     daemon=True).start()
+
+            except Exception as e:
+                self._log(f"RGB 감시 오류: {e}", "error")
+
+            interval = max(0.1, int(self.v_rgb_interval.get() or 500) / 1000)
+            self.rgb_stop_event.wait(interval)
+
+    def _execute_rgb_actions(self):
+        acts = self.config.get("rgb_actions", [])
+        for idx, act in enumerate(acts):
+            if not act.get("enabled", False):
+                continue
+            atype       = act.get("type", "none")
+            delay_bef   = act.get("delay_before", 0) / 1000
+            delay_aft   = act.get("delay_after",  200) / 1000
+            ax, ay      = act.get("x"), act.get("y")
+            click_type  = act.get("click_type", "left")
+            key_name    = act.get("key", "")
+
+            try:
+                if delay_bef > 0:
+                    time.sleep(delay_bef)
+
+                if atype == "move" and ax is not None:
+                    pyautogui.moveTo(ax, ay, duration=0.1)
+                    self._log(f"  #{ idx+1} 마우스 이동 → ({ax},{ay})", "info")
+
+                elif atype == "click" and ax is not None:
+                    if click_type == "right":
+                        pyautogui.rightClick(ax, ay)
+                    elif click_type == "double":
+                        pyautogui.doubleClick(ax, ay)
+                    else:
+                        pyautogui.click(ax, ay)
+                    ct = {"left":"좌클릭","right":"우클릭","double":"더블클릭"}.get(click_type,"클릭")
+                    self._log(f"  #{idx+1} {ct} → ({ax},{ay})", "info")
+
+                elif atype == "key" and key_name:
+                    pyautogui.press(key_name)
+                    self._log(f"  #{idx+1} 키 입력: [{key_name}]", "info")
+
+                elif atype == "delay":
+                    time.sleep(delay_aft)
+                    self._log(f"  #{idx+1} 지연: {int(delay_aft*1000)}ms", "info")
+                    continue  # delay 타입은 delay_after 대신 직접 처리
+
+                if delay_aft > 0:
+                    time.sleep(delay_aft)
+
+            except Exception as e:
+                self._log(f"  #{idx+1} 액션 오류: {e}", "error")
 
     def _watch_worker(self):
         INTERVAL = 0.5
