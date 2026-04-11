@@ -15,7 +15,7 @@ import pystray
 from PIL import Image, ImageDraw, ImageGrab
 from updater import check_and_update, check_update_on_startup
 
-APP_VERSION  = "1.1.9"
+APP_VERSION  = "1.2.0"
 APP_EXE_NAME = "LineageHP"
 
 CONFIG_FILE = "hp_config.json"
@@ -113,6 +113,8 @@ class App:
         self.watch_btn_caps   = []
         self.watch_progress   = None
         self.lbl_watch_status = None
+        self.btn_watch_start  = None
+        self.btn_watch_stop   = None
         self.alt_key_state    = 0
         self.alt_repeat_stop  = threading.Event()
         self.alt_repeat_on    = False
@@ -344,10 +346,10 @@ class App:
         nb.add(t4, text="   펑션키 자동입력   ")
         self._build_tab_fkey(t4)
 
-        # Tab 5 : 클라이언트 감시
-        t5 = ttk.Frame(nb, padding="8 6")
-        nb.add(t5, text="   클라이언트 감시   ")
-        self._build_tab_watch(t5)
+        # Tab 5 : 클라이언트 감시 (숨김)
+        # t5 = ttk.Frame(nb, padding="8 6")
+        # nb.add(t5, text="   클라이언트 감시   ")
+        # self._build_tab_watch(t5)
 
         # ── 공통 버튼 ──
         bf = ttk.Frame(pad)
@@ -367,9 +369,9 @@ class App:
                    command=self._hide_to_tray,
                    style="Tray.TButton").pack(side="left", padx=(0, 4))
 
-        ttk.Button(bf, text="\u2699 감지 설정",
-                   command=self._open_settings,
-                   style="Set.TButton").pack(side="left", padx=(0, 4))
+        # ttk.Button(bf, text="\u2699 감지 설정",
+        #            command=self._open_settings,
+        #            style="Set.TButton").pack(side="left", padx=(0, 4))
 
         ttk.Button(bf, text="명령어 테스트",
                    command=lambda: threading.Thread(
@@ -915,6 +917,8 @@ class App:
 
     # ─── Watch Capture ────────────────────────────────────────
     def _start_watch_capture(self, num):
+        if not self.watch_btn_caps or num - 1 >= len(self.watch_btn_caps):
+            return
         btn = self.watch_btn_caps[num - 1]
         btn.configure(state="disabled")
         self._log(f"감시 {num}차 좌표 캡처 - 3초 안에 마우스를 이동하세요", "warning")
@@ -929,12 +933,12 @@ class App:
         self.config[f"watch_c{num}_x"] = x
         self.config[f"watch_c{num}_y"] = y
         var = [self.v_watch_c1_pos, self.v_watch_c2_pos, self.v_watch_c3_pos][num - 1]
-        btn = self.watch_btn_caps[num - 1]
+        btn = self.watch_btn_caps[num - 1] if self.watch_btn_caps and num - 1 < len(self.watch_btn_caps) else None
         def _done():
             var.set(f"({x}, {y})")
             self._save_config(show_msg=False)
             self._log(f"감시 {num}차 좌표 설정: ({x},{y})", "success")
-            if btn.winfo_exists():
+            if btn and btn.winfo_exists():
                 btn.configure(state="normal")
         self.root.after(0, _done)
 
@@ -948,16 +952,20 @@ class App:
             return
         self.watch_stop_event.clear()
         self.watch_running = True
-        self.btn_watch_start.configure(state="disabled")
-        self.btn_watch_stop.configure(state="normal")
+        if self.btn_watch_start:
+            self.btn_watch_start.configure(state="disabled")
+        if self.btn_watch_stop:
+            self.btn_watch_stop.configure(state="normal")
         self._log("클라이언트 감시 시작 (화면 픽셀 변화 방식)", "success")
         threading.Thread(target=self._watch_worker, daemon=True).start()
 
     def _toggle_watch_off(self):
         self.watch_stop_event.set()
         self.watch_running = False
-        self.btn_watch_start.configure(state="normal")
-        self.btn_watch_stop.configure(state="disabled")
+        if self.btn_watch_start:
+            self.btn_watch_start.configure(state="normal")
+        if self.btn_watch_stop:
+            self.btn_watch_stop.configure(state="disabled")
         self._watch_set_status("중지됨", "#888888", 0)
         self._log("클라이언트 감시 중지", "warning")
 
