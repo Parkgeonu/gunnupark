@@ -15,7 +15,7 @@ import pystray
 from PIL import Image, ImageDraw, ImageGrab
 from updater import check_and_update, check_update_on_startup
 
-APP_VERSION  = "1.3.0"
+APP_VERSION  = "1.3.1"
 APP_EXE_NAME = "LineageHP"
 
 CONFIG_FILE = "hp_config.json"
@@ -1123,13 +1123,11 @@ class App:
         atype = act.get("type", "none")
         enabled = self.rgb_action_enabled[idx].get()
         type_map = {
-            "none": "없음", "move": "마우스 이동",
-            "click": "마우스 클릭", "key": "키보드 입력", "delay": "지연"
+            "none": "없음", "move_click": "마우스 이동 후 클릭",
+            "key": "키보드 입력", "delay": "지연"
         }
         label = type_map.get(atype, "없음")
-        if atype == "move":
-            label += f"  →  ({act.get('x','?')}, {act.get('y','?')})"
-        elif atype == "click":
+        if atype == "move_click":
             ct = {"left":"좌클릭","right":"우클릭","double":"더블클릭"}.get(act.get("click_type","left"),"좌클릭")
             label += f"  →  {ct}  ({act.get('x','?')}, {act.get('y','?')})"
         elif atype == "key":
@@ -1187,9 +1185,12 @@ class App:
 
         pad = ttk.Frame(win, padding="14 12"); pad.pack(fill="both", expand=True)
 
-        TYPE_OPTS = ["없음", "마우스 이동", "마우스 클릭", "키보드 입력", "지연"]
-        TYPE_KEY  = ["none", "move", "click", "key", "delay"]
+        TYPE_OPTS = ["없음", "마우스 이동 후 클릭", "키보드 입력", "지연"]
+        TYPE_KEY  = ["none", "move_click", "key", "delay"]
         cur_type  = act.get("type", "none")
+        # 이전 버전 호환 (move/click → move_click)
+        if cur_type in ("move", "click"):
+            cur_type = "move_click"
         try:
             cur_label = TYPE_OPTS[TYPE_KEY.index(cur_type)]
         except ValueError:
@@ -1277,8 +1278,8 @@ class App:
 
         def _on_type_change(*_):
             sel = v_type.get()
-            st_coord  = "normal" if sel in ("마우스 이동", "마우스 클릭") else "disabled"
-            st_click  = "normal" if sel == "마우스 클릭" else "disabled"
+            st_coord  = "normal" if sel == "마우스 이동 후 클릭" else "disabled"
+            st_click  = "normal" if sel == "마우스 이동 후 클릭" else "disabled"
             st_key    = "normal" if sel == "키보드 입력"  else "disabled"
             for w in coord_widgets:  w.configure(state=st_coord)
             for w in r2.winfo_children()[1:]:
@@ -1409,11 +1410,8 @@ class App:
                 if delay_bef > 0:
                     time.sleep(delay_bef)
 
-                if atype == "move" and ax is not None:
+                if atype == "move_click" and ax is not None:
                     pyautogui.moveTo(ax, ay, duration=0.1)
-                    self._log(f"  #{ idx+1} 마우스 이동 → ({ax},{ay})", "info")
-
-                elif atype == "click" and ax is not None:
                     if click_type == "right":
                         pyautogui.rightClick(ax, ay)
                     elif click_type == "double":
@@ -1421,7 +1419,13 @@ class App:
                     else:
                         pyautogui.click(ax, ay)
                     ct = {"left":"좌클릭","right":"우클릭","double":"더블클릭"}.get(click_type,"클릭")
-                    self._log(f"  #{idx+1} {ct} → ({ax},{ay})", "info")
+                    self._log(f"  #{idx+1} 이동 후 {ct} → ({ax},{ay})", "info")
+
+                elif atype in ("move", "click") and ax is not None:
+                    # 이전 버전 호환
+                    pyautogui.moveTo(ax, ay, duration=0.1)
+                    pyautogui.click(ax, ay)
+                    self._log(f"  #{idx+1} (구형) 이동+클릭 → ({ax},{ay})", "info")
 
                 elif atype == "key" and key_name:
                     pyautogui.press(key_name)
